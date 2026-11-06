@@ -1,0 +1,2 @@
+CompileFlags:
+  Add: [-I/run/current-system/sw/include]
