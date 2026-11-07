@@ -1,18 +1,21 @@
 #define SDL_MAIN_USE_CALLBACKS 1
 #define VK_NO_PROTOTYPES
+#include <volk.h>
 
 #include <SDL3/SDL.h>
+#include <SDL3/SDL_init.h>
 #include <SDL3/SDL_main.h>
 #include <SDL3/SDL_vulkan.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <volk.h>
-#include <vulkan/vulkan.h>
-#include <SDL3/SDL_init.h>
-#include <vulkan/vulkan_core.h>
+#include <vk_mem_alloc.h>
 #include <vulkan/vk_enum_string_helper.h>
+#include <vulkan/vulkan.h>
+#include <vulkan/vulkan_core.h>
 
 #define ARRLEN(x) (sizeof(x) / sizeof(*x))
+
+#define APP_COLOR_FORMAT VK_FORMAT_B8G8R8A8_SRGB
 
 struct Window {
   SDL_Window *sdl_window;
@@ -20,21 +23,40 @@ struct Window {
   uint32_t height;
 };
 
-#define APP_WAIT  "WAIT:  "
-#define APP_OK    "OK:    "
+struct Swapchain {
+  uint32_t width;
+  uint32_t height;
+  VkFormat format;
+  VkSwapchainKHR vk_swapchain;
+  uint32_t image_count;
+  VkImage *images;
+  uint32_t image_view_count;
+  VkImageView *image_views;
+  uint32_t semaphores_count;
+  VkSemaphore *semaphores;
+};
+
+#define APP_WAIT "WAIT:  "
+#define APP_OK "OK:    "
 #define APP_ERROR "ERROR: "
+
+struct Vulkan {
+  uint32_t version;
+  uint32_t instanceExtensionCount;
+  const char **instanceExtensionNames;
+  VkInstance instance;
+  VkSurfaceKHR surface;
+  VkPhysicalDevice physicalDevice;
+  VkDevice device;
+};
 
 struct Renderer {
   struct Window window;
-  uint32_t vulkanVersion;
-  uint32_t instanceExtensionCount;
-  const char **instanceExtensionNames;
-  VkInstance vulkanInstance;
-  VkSurfaceKHR vulkanSurface;
-  VkPhysicalDevice physicalDevice;
+  struct Vulkan vulkan;
   uint32_t graphicsQueueFamilyId;
   VkQueue graphicsQueue;
-  VkDevice device;
+  VmaAllocator allocator;
+  struct Swapchain swapchain;
 };
 
 struct Renderer Renderer = {0};
@@ -74,6 +96,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   SDL_ResultCheck(SDL_Init(SDL_INIT_VIDEO));
   Renderer.window.width = 800;
   Renderer.window.height = 600;
+  Renderer.swapchain.format = APP_COLOR_FORMAT;
 
   Renderer.window.sdl_window =
       SDL_CreateWindow("Vulkan + SDL3", Renderer.window.width,
@@ -87,19 +110,19 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
     return SDL_APP_FAILURE;
   }
 
-  vkEnumerateInstanceVersion(&Renderer.vulkanVersion);
-  SDL_Log(APP_OK"Vulkan API version: %d.%d.%d",
-          VK_API_VERSION_MAJOR(Renderer.vulkanVersion),
-          VK_API_VERSION_MINOR(Renderer.vulkanVersion),
-          VK_API_VERSION_PATCH(Renderer.vulkanVersion));
+  vkEnumerateInstanceVersion(&Renderer.vulkan.version);
+  SDL_Log(APP_OK "Vulkan API version: %d.%d.%d",
+          VK_API_VERSION_MAJOR(Renderer.vulkan.version),
+          VK_API_VERSION_MINOR(Renderer.vulkan.version),
+          VK_API_VERSION_PATCH(Renderer.vulkan.version));
 
   //------------------------------------------------------------------------------
   // Creating VkInstance
-  
+
   VkApplicationInfo app_info = {.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO};
   app_info.pNext = NULL;
   app_info.pApplicationName = "Vulkan + SDL3";
-  app_info.apiVersion = Renderer.vulkanVersion;
+  app_info.apiVersion = Renderer.vulkan.version;
   app_info.pEngineName = "Vector";
 
   char *instance_extension_custom_names[] = {
@@ -111,25 +134,27 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
       SDL_Vulkan_GetInstanceExtensions(&instance_extension_default_count);
   uint32_t instance_extension_custom_count =
       ARRLEN(instance_extension_custom_names);
-  Renderer.instanceExtensionCount =
+  Renderer.vulkan.instanceExtensionCount =
       instance_extension_default_count + instance_extension_custom_count;
 
-  Renderer.instanceExtensionNames =
-      malloc(Renderer.instanceExtensionCount * sizeof(char *));
-  memcpy(&Renderer.instanceExtensionNames[0], instance_extension_default_names,
+  Renderer.vulkan.instanceExtensionNames =
+      malloc(Renderer.vulkan.instanceExtensionCount * sizeof(char *));
+  memcpy(&Renderer.vulkan.instanceExtensionNames[0],
+         instance_extension_default_names,
          instance_extension_default_count * sizeof(char *));
 
-  memcpy(&Renderer.instanceExtensionNames[instance_extension_default_count],
-         instance_extension_custom_names,
-         instance_extension_custom_count * sizeof(char *));
+  memcpy(
+      &Renderer.vulkan.instanceExtensionNames[instance_extension_default_count],
+      instance_extension_custom_names,
+      instance_extension_custom_count * sizeof(char *));
 
   const char *InstanceRequestedLayers[] = {
       "VK_LAYER_KHRONOS_validation",
   };
 
-  SDL_Log("%d extensions:", Renderer.instanceExtensionCount);
-  for (uint32_t i = 0; i < Renderer.instanceExtensionCount; i++) {
-    SDL_Log("%s", Renderer.instanceExtensionNames[i]);
+  SDL_Log("%d extensions:", Renderer.vulkan.instanceExtensionCount);
+  for (uint32_t i = 0; i < Renderer.vulkan.instanceExtensionCount; i++) {
+    SDL_Log("%s", Renderer.vulkan.instanceExtensionNames[i]);
   }
 
   VkDebugUtilsMessengerCreateInfoEXT debug_info = {
@@ -147,35 +172,38 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
   instance_info.pNext = &debug_info;
   instance_info.pApplicationInfo = &app_info;
-  instance_info.enabledExtensionCount = Renderer.instanceExtensionCount;
-  instance_info.ppEnabledExtensionNames = Renderer.instanceExtensionNames;
+  instance_info.enabledExtensionCount = Renderer.vulkan.instanceExtensionCount;
+  instance_info.ppEnabledExtensionNames =
+      Renderer.vulkan.instanceExtensionNames;
   instance_info.enabledLayerCount = ARRLEN(InstanceRequestedLayers);
   instance_info.ppEnabledLayerNames = InstanceRequestedLayers;
 
-  SDL_Log(APP_WAIT"Creating a vulkan instance");
+  SDL_Log(APP_WAIT "Creating a vulkan instance");
   VkResultCheck(
-      vkCreateInstance(&instance_info, NULL, &Renderer.vulkanInstance));
-  SDL_Log(APP_OK"Vulkan instance created");
+      vkCreateInstance(&instance_info, NULL, &Renderer.vulkan.instance));
+  SDL_Log(APP_OK "Vulkan instance created");
 
-  SDL_Log(APP_WAIT"Loading vulkan instance");
-  volkLoadInstance(Renderer.vulkanInstance);
-  SDL_Log(APP_OK"Vulkan instance loaded");
-  
+  SDL_Log(APP_WAIT "Loading vulkan instance");
+  volkLoadInstance(Renderer.vulkan.instance);
+  SDL_Log(APP_OK "Vulkan instance loaded");
+
   // Create surface
   //------------------------------------------------------------------------------------------------------
-  SDL_Log(APP_WAIT"Creating vulkan surface");
-  SDL_ResultCheck(SDL_Vulkan_CreateSurface(Renderer.window.sdl_window, Renderer.vulkanInstance, NULL, &Renderer.vulkanSurface));
-  SDL_Log(APP_OK"Vulkan surface created");
+  SDL_Log(APP_WAIT "Creating vulkan surface");
+  SDL_ResultCheck(SDL_Vulkan_CreateSurface(Renderer.window.sdl_window,
+                                           Renderer.vulkan.instance, NULL,
+                                           &Renderer.vulkan.surface));
+  SDL_Log(APP_OK "Vulkan surface created");
 
   // Find physical device
   //------------------------------------------------------------------------------------------------------
-  SDL_Log(APP_WAIT"Looking for physical devices");
-  
+  SDL_Log(APP_WAIT "Looking for physical devices");
+
   uint32_t physical_device_count;
-  vkEnumeratePhysicalDevices(Renderer.vulkanInstance, &physical_device_count,
+  vkEnumeratePhysicalDevices(Renderer.vulkan.instance, &physical_device_count,
                              NULL);
   if (!physical_device_count) {
-    SDL_Log(APP_ERROR"no physical devices found");
+    SDL_Log(APP_ERROR "no physical devices found");
     return SDL_APP_FAILURE;
   }
 
@@ -183,48 +211,79 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   SDL_Log(APP_WAIT "Choosing the best one");
   VkPhysicalDevice *physical_devices =
       malloc(physical_device_count * sizeof(VkPhysicalDevice));
-  vkEnumeratePhysicalDevices(Renderer.vulkanInstance, &physical_device_count,
+  vkEnumeratePhysicalDevices(Renderer.vulkan.instance, &physical_device_count,
                              physical_devices);
-  Renderer.physicalDevice = physical_devices[0];
-  
+  Renderer.vulkan.physicalDevice = physical_devices[0];
+
   for (size_t i = 0; i < physical_device_count; i++) {
     VkPhysicalDeviceProperties props = {0};
     vkGetPhysicalDeviceProperties(physical_devices[i], &props);
     if (props.deviceType == VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU) {
-      Renderer.physicalDevice = physical_devices[i];
-      SDL_Log(APP_OK"Found discrete GPU");
+      Renderer.vulkan.physicalDevice = physical_devices[i];
+      SDL_Log(APP_OK "Found discrete GPU");
       break;
-    }      
+    }
+  }
+
+  uint32_t physical_device_format_count = 0;
+  vkGetPhysicalDeviceSurfaceFormatsKHR(Renderer.vulkan.physicalDevice,
+                                       Renderer.vulkan.surface,
+                                       &physical_device_format_count, NULL);
+  VkSurfaceFormatKHR *physical_device_formats =
+      malloc(physical_device_format_count * sizeof(VkFormat));
+
+  vkGetPhysicalDeviceSurfaceFormatsKHR(
+      Renderer.vulkan.physicalDevice, Renderer.vulkan.surface,
+      &physical_device_format_count, physical_device_formats);
+
+  bool format_supported = false;
+  for (uint32_t i = 0; i < physical_device_format_count; i++) {
+    if (physical_device_formats[i].format == Renderer.swapchain.format) {
+      format_supported = true;
+      break;
+    }
+  }
+
+  if (!format_supported) {
+    SDL_Log(APP_ERROR "Requested swapchain format not supported");
+    return SDL_APP_FAILURE;
   }
 
   VkPhysicalDeviceProperties physical_device_properties = {0};
-  vkGetPhysicalDeviceProperties(Renderer.physicalDevice, &physical_device_properties);
-  SDL_Log(APP_OK"Physical device chosen: %s", physical_device_properties.deviceName);
+  vkGetPhysicalDeviceProperties(Renderer.vulkan.physicalDevice,
+                                &physical_device_properties);
+  SDL_Log(APP_OK "Physical device chosen: %s",
+          physical_device_properties.deviceName);
 
   // Find graphics queue
   //------------------------------------------------------------------------------------------------------
-  SDL_Log(APP_WAIT"Looking for graphics queue");
+  SDL_Log(APP_WAIT "Looking for graphics queue");
 
   uint32_t graphics_queue_family_count = 0;
-  vkGetPhysicalDeviceQueueFamilyProperties2(Renderer.physicalDevice,
+  vkGetPhysicalDeviceQueueFamilyProperties2(Renderer.vulkan.physicalDevice,
                                             &graphics_queue_family_count, NULL);
-  SDL_Log(APP_OK"Found %d graphics queue families", graphics_queue_family_count);
+  SDL_Log(APP_OK "Found %d graphics queue families",
+          graphics_queue_family_count);
   VkQueueFamilyProperties2 *graphics_queue_family_properties_array;
   graphics_queue_family_properties_array =
       calloc(graphics_queue_family_count, sizeof(VkQueueFamilyProperties2));
   for (size_t i = 0; i < graphics_queue_family_count; i++) {
-        graphics_queue_family_properties_array[i].sType = VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
-  }    
-  vkGetPhysicalDeviceQueueFamilyProperties2(Renderer.physicalDevice, &graphics_queue_family_count, graphics_queue_family_properties_array);
+    graphics_queue_family_properties_array[i].sType =
+        VK_STRUCTURE_TYPE_QUEUE_FAMILY_PROPERTIES_2;
+  }
+  vkGetPhysicalDeviceQueueFamilyProperties2(
+      Renderer.vulkan.physicalDevice, &graphics_queue_family_count,
+      graphics_queue_family_properties_array);
 
   bool found_queue_family_with_present_support = false;
   SDL_Log(APP_WAIT "Choosing one with Present support");
   for (size_t i = 0; i < graphics_queue_family_count; i++) {
-    VkQueueFamilyProperties2 *props = &graphics_queue_family_properties_array[i];
+    VkQueueFamilyProperties2 *props =
+        &graphics_queue_family_properties_array[i];
 
     VkBool32 has_present_support = VK_FALSE;
-    vkGetPhysicalDeviceSurfaceSupportKHR(Renderer.physicalDevice, i,
-                                         Renderer.vulkanSurface,
+    vkGetPhysicalDeviceSurfaceSupportKHR(Renderer.vulkan.physicalDevice, i,
+                                         Renderer.vulkan.surface,
                                          &has_present_support);
 
     if (props->queueFamilyProperties.queueFlags & VK_QUEUE_GRAPHICS_BIT &&
@@ -232,14 +291,14 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
       Renderer.graphicsQueueFamilyId = i;
       found_queue_family_with_present_support = true;
       break;
-    }      
+    }
   }
 
   if (!found_queue_family_with_present_support) {
-    SDL_Log(APP_ERROR"Queue family with Present support not found");
+    SDL_Log(APP_ERROR "Queue family with Present support not found");
     return SDL_APP_FAILURE;
   }
-  SDL_Log(APP_OK"Found graphics queue with Present support");
+  SDL_Log(APP_OK "Found graphics queue with Present support");
 
   // Creating device
   //------------------------------------------------------------------------------------------------------
@@ -255,42 +314,43 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   VkPhysicalDeviceFeatures2 supported_features = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2,
       .pNext = &supported_features_12};
-  vkGetPhysicalDeviceFeatures2(Renderer.physicalDevice, &supported_features);
+  vkGetPhysicalDeviceFeatures2(Renderer.vulkan.physicalDevice,
+                               &supported_features);
 
-  SDL_Log(APP_WAIT"Checking for available physical device features");
+  SDL_Log(APP_WAIT "Checking for available physical device features");
   if (!supported_features_13.dynamicRendering ||
       !supported_features_13.synchronization2 ||
       !supported_features_12.timelineSemaphore) {
     SDL_Log(APP_ERROR "Physical device doesn't meet the feature requirements");
     return SDL_APP_FAILURE;
   }
-  SDL_Log(APP_OK"Physical device meets the feature requirements");
-  
+  SDL_Log(APP_OK "Physical device meets the feature requirements");
+
   VkPhysicalDeviceVulkan14Features requested_features_14 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
       .pNext = NULL};
   VkPhysicalDeviceVulkan13Features requested_features_13 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
       .pNext = &requested_features_14,
-      .synchronization2 = VK_TRUE, // modernized synchronization
+      .synchronization2 = VK_TRUE,  // modernized synchronization
       .dynamicRendering = VK_TRUE}; // no renderpass/subpasses
 
   VkPhysicalDeviceVulkan12Features requested_features_12 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-      .pNext = &requested_features_13, // streamlined multi-frame-in-flight handling
+      .pNext =
+          &requested_features_13, // streamlined multi-frame-in-flight handling
       .timelineSemaphore = VK_TRUE};
-  
+
   VkPhysicalDeviceFeatures2 requested_features = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
       .pNext = &requested_features_12};
 
   float queue_priorities[] = {1.0f};
   VkDeviceQueueCreateInfo queue_create_info = {
-    .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
-    .queueFamilyIndex = Renderer.graphicsQueueFamilyId,
-    .queueCount = ARRLEN(queue_priorities),
-    .pQueuePriorities = queue_priorities
-  };
+      .sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO,
+      .queueFamilyIndex = Renderer.graphicsQueueFamilyId,
+      .queueCount = ARRLEN(queue_priorities),
+      .pQueuePriorities = queue_priorities};
 
   const char *device_extensions[] = {VK_KHR_SWAPCHAIN_EXTENSION_NAME};
   VkDeviceCreateInfo device_create_info = {0};
@@ -302,13 +362,90 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   device_create_info.ppEnabledExtensionNames = device_extensions;
   device_create_info.pEnabledFeatures = NULL;
 
-  SDL_Log(APP_WAIT"Creating device");
-  VkResultCheck(vkCreateDevice(Renderer.physicalDevice, &device_create_info, NULL, &Renderer.device));
+  SDL_Log(APP_WAIT "Creating device");
+  VkResultCheck(vkCreateDevice(Renderer.vulkan.physicalDevice,
+                               &device_create_info, NULL,
+                               &Renderer.vulkan.device));
   SDL_Log(APP_OK "Device created");
 
-  SDL_Log(APP_WAIT"Getting device queue");
-  vkGetDeviceQueue(Renderer.device, Renderer.graphicsQueueFamilyId, 0, &Renderer.graphicsQueue);
+  SDL_Log(APP_WAIT "Getting device queue");
+  vkGetDeviceQueue(Renderer.vulkan.device, Renderer.graphicsQueueFamilyId, 0,
+                   &Renderer.graphicsQueue);
   SDL_Log(APP_OK "Device queue ready");
+
+  // Initializing VMA
+  //------------------------------------------------------------------------------------------------------
+  VmaVulkanFunctions vma_func_info = {0};
+  VmaAllocatorCreateInfo vma_allocator_info = {0};
+  vma_allocator_info.flags = VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT;
+  vma_allocator_info.physicalDevice = Renderer.vulkan.physicalDevice;
+  vma_allocator_info.device = Renderer.vulkan.device;
+  vma_allocator_info.pVulkanFunctions = &vma_func_info;
+  vma_allocator_info.instance = Renderer.vulkan.instance;
+  vma_allocator_info.vulkanApiVersion = Renderer.vulkan.version;
+
+  SDL_Log(APP_WAIT "Creating VMA allocator");
+  vmaImportVulkanFunctionsFromVolk(&vma_allocator_info, &vma_func_info);
+  if (vmaCreateAllocator(&vma_allocator_info, &Renderer.allocator) !=
+      VK_SUCCESS) {
+    SDL_Log(APP_ERROR "Failed to create VMA allocator");
+    return SDL_APP_FAILURE;
+  }
+  SDL_Log(APP_OK "VMA allocator created");
+
+  // Creating swapchain
+  //------------------------------------------------------------------------------------------------------
+  Renderer.swapchain.width = Renderer.window.width;
+  Renderer.swapchain.height = Renderer.window.height;
+
+  VkSurfaceCapabilitiesKHR surface_capabilities = {0};
+  SDL_Log(APP_WAIT "Getting surface capabilities");
+  VkResultCheck(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+      Renderer.vulkan.physicalDevice, Renderer.vulkan.surface,
+      &surface_capabilities));
+  SDL_Log(APP_OK "Surface capabilities ready");
+
+  uint32_t requested_image_count =
+      SDL_max(2, surface_capabilities.minImageCount);
+  if (surface_capabilities.maxImageCount > 0) {
+    requested_image_count =
+        SDL_min(requested_image_count, surface_capabilities.maxImageCount);
+  }
+
+  VkSwapchainCreateInfoKHR swapchain_info = {0};
+  swapchain_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
+  swapchain_info.surface = Renderer.vulkan.surface;
+  swapchain_info.minImageCount = requested_image_count;
+  swapchain_info.imageFormat = Renderer.swapchain.format;
+  swapchain_info.imageColorSpace = VK_COLORSPACE_SRGB_NONLINEAR_KHR;
+  swapchain_info.imageExtent = (VkExtent2D){
+      .width = Renderer.swapchain.width, .height = Renderer.swapchain.height};
+  swapchain_info.imageArrayLayers = 1;
+  swapchain_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
+  swapchain_info.preTransform = surface_capabilities.currentTransform;
+  swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+  swapchain_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+
+  SDL_Log(APP_WAIT "Creating swapchain");
+  VkResultCheck(vkCreateSwapchainKHR(Renderer.vulkan.device, &swapchain_info,
+                                     NULL, &Renderer.swapchain.vk_swapchain));
+  SDL_Log(APP_OK "Swapchain created");
+
+  SDL_Log(APP_WAIT "Loading swapchain images");
+  vkGetSwapchainImagesKHR(Renderer.vulkan.device,
+                          Renderer.swapchain.vk_swapchain,
+                          &Renderer.swapchain.image_count, NULL);
+  Renderer.swapchain.images =
+      malloc(Renderer.swapchain.image_count * sizeof(VkImage));
+
+  vkGetSwapchainImagesKHR(
+      Renderer.vulkan.device, Renderer.swapchain.vk_swapchain,
+      &Renderer.swapchain.image_count, Renderer.swapchain.images);
+  SDL_Log(APP_OK "Swapchain images loaded");
+
+  Renderer.swapchain.image_view_count = Renderer.swapchain.image_count;
+  
+
   
   return SDL_APP_CONTINUE;
 }
@@ -329,14 +466,23 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 }
 
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
-  if (Renderer.device) {
-    vkDestroyDevice(Renderer.device, NULL);
-  }    
-  if (Renderer.vulkanSurface) {
-    vkDestroySurfaceKHR(Renderer.vulkanInstance, Renderer.vulkanSurface, NULL);
-  }    
-  if (Renderer.vulkanInstance) {
-    vkDestroyInstance(Renderer.vulkanInstance, NULL);
+  if (Renderer.swapchain.vk_swapchain) {
+    vkDestroySwapchainKHR(Renderer.vulkan.device,
+                          Renderer.swapchain.vk_swapchain, NULL);
+  }
+
+  if (Renderer.allocator) {
+    vmaDestroyAllocator(Renderer.allocator);
+  }
+  if (Renderer.vulkan.device) {
+    vkDestroyDevice(Renderer.vulkan.device, NULL);
+  }
+  if (Renderer.vulkan.surface) {
+    vkDestroySurfaceKHR(Renderer.vulkan.instance, Renderer.vulkan.surface,
+                        NULL);
+  }
+  if (Renderer.vulkan.instance) {
+    vkDestroyInstance(Renderer.vulkan.instance, NULL);
   }
   volkFinalize();
 }
