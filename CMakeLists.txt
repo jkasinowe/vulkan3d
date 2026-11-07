@@ -14,11 +14,21 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Vulkan App
 add_executable(vulkan_app main.c vk_mem_alloc.cpp)
+set_target_properties(vulkan_app PROPERTIES LINKER_LANGUAGE CXX)
 
-find_package(Vulkan REQUIRED COMPONENTS volk shaderc_combined)
+find_package(Vulkan REQUIRED COMPONENTS volk shaderc)
 find_package(SDL3 REQUIRED)
+find_package(SPIRV-Tools REQUIRED)
 
-# Link the imported targets
-target_link_libraries(vulkan_app PRIVATE Vulkan::volk SDL3::SDL3 Vulkan::shaderc_combined)
+
+target_link_libraries(vulkan_app PRIVATE   Vulkan::volk
+				 SDL3::SDL3  Vulkan::shaderc
+				 SPIRV-Tools::SPIRV-Tools
+				 OSDependent
+				 glslang
+				 SPIRV
+				 pthread
+				 
+)
 
 

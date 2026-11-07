@@ -1,8 +1,17 @@
+#include <SDL3/SDL_error.h>
+#include <SDL3/SDL_log.h>
+#include <shaderc/env.h>
+#include <shaderc/status.h>
 #include <stdint.h>
+#include <string.h>
+
 #define SDL_MAIN_USE_CALLBACKS 1
 #define VK_NO_PROTOTYPES
 #include <volk.h>
+
 #include <shaderc/shaderc.h>
+
+
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_main.h>
@@ -420,7 +429,7 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   // Creating shaders
   //------------------------------------------------------------------------------------------------------
   if (APP_ShadersCreate() == SDL_APP_FAILURE) {
-    return SDL_APP_FAILURE
+    return SDL_APP_FAILURE;
   }    
   
   
@@ -622,11 +631,64 @@ void APP_SwapchainDestroy() {
 
 // SHADER CREATION AND COMPILATION
 
-VkShaderModule APP_ShaderModuleCreate(char* file_name, shaderc_shader_kind kind) {
+SDL_AppResult APP_ShaderModuleCreate(const char *file_name,
+                                     shaderc_shader_kind kind,
+                                     const char *entry_point,
+                                     VkShaderModule *shader_module) {
+  *shader_module = NULL;
   
-}  
+  size_t file_path_size = strlen(APP_SHADER_PATH) + strlen(file_name) + 1;
+  char *file_path = malloc(sizeof(char) * file_path_size);
+  strcpy(file_path, APP_SHADER_PATH);
+  strcpy(&file_path[strlen(APP_SHADER_PATH)], file_name);
+
+  size_t src_size = 0;
+  char *src = SDL_LoadFile(file_path, &src_size);
+
+  if (!src) {
+    SDL_Log("%s", SDL_GetError());
+    return SDL_APP_FAILURE;
+  }
+
+  SDL_Log(APP_WAIT"Compiling shader %s", file_path);
+  shaderc_compiler_t compiler = shaderc_compiler_initialize();
+  shaderc_compile_options_t options = shaderc_compile_options_initialize();
+  shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_4);
+  shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_6);
+  shaderc_compile_options_set_optimization_level(
+      options, shaderc_optimization_level_performance);
+  shaderc_compilation_result_t result = shaderc_compile_into_spv(
+      compiler, src, src_size, kind, file_name, entry_point, options);
+
+  if (shaderc_result_get_compilation_status(result) !=
+      shaderc_compilation_status_success) {
+    SDL_Log(APP_ERROR "Shader compilation Error: %s",
+            shaderc_result_get_error_message(result));
+    return SDL_APP_FAILURE;
+  }    
+  SDL_Log(APP_OK"Shader compiled");
+  SDL_Log(APP_WAIT"Creating shader module");
+
+  const size_t shader_size = shaderc_result_get_length(result);
+
+  VkShaderModuleCreateInfo module_create_info = {0};
+  module_create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+  module_create_info.codeSize = shader_size;
+  module_create_info.pCode = (uint32_t *)shaderc_result_get_bytes(result);
+  
+  VkResultCheck(vkCreateShaderModule(Renderer.vulkan.device, &module_create_info, NULL, shader_module));
+
+  SDL_Log(APP_OK"Shader module created");
+  SDL_free(src);
+  return SDL_APP_CONTINUE;
+}
 
 SDL_AppResult APP_ShadersCreate() {
+  VkShaderModule shader_module = NULL;
+  if (APP_ShaderModuleCreate("shader.vs", shaderc_vertex_shader, "main",
+                             &shader_module) == SDL_APP_FAILURE) {
+    return SDL_APP_FAILURE;
+  }
   
-
+  return SDL_APP_CONTINUE;
 }  
