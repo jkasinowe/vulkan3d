@@ -11,7 +11,7 @@ add_executable(vulkan_app main.c)
 
 find_package(Vulkan REQUIRED COMPONENTS volk)
 find_package(SDL3 REQUIRED)
-find_package(cglm REQUIRED)
+#find_package(cglm REQUIRED)
 
 # Link the imported targets
-target_link_libraries(vulkan_app PRIVATE Vulkan::volk SDL3::SDL3 cglm)
+target_link_libraries(vulkan_app PRIVATE Vulkan::volk SDL3::SDL3)
