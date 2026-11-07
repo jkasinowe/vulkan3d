@@ -1,7 +1,8 @@
+#include <stdint.h>
 #define SDL_MAIN_USE_CALLBACKS 1
 #define VK_NO_PROTOTYPES
 #include <volk.h>
-
+#include <shaderc/shaderc.h>
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_main.h>
@@ -16,6 +17,9 @@
 #define ARRLEN(x) (sizeof(x) / sizeof(*x))
 
 #define APP_COLOR_FORMAT VK_FORMAT_B8G8R8A8_SRGB
+#define APP_DEPTH_FORMAT VK_FORMAT_D32_SFLOAT
+#define APP_SHADER_PATH "src/shaders/"
+
 
 struct Window {
   SDL_Window *sdl_window;
@@ -32,7 +36,7 @@ struct Swapchain {
   VkImage *images;
   uint32_t image_view_count;
   VkImageView *image_views;
-  uint32_t semaphores_count;
+  uint32_t semaphore_count;
   VkSemaphore *semaphores;
 };
 
@@ -50,6 +54,13 @@ struct Vulkan {
   VkDevice device;
 };
 
+struct Depth {
+  VkFormat format;
+  VkImage image;
+  VmaAllocation image_allocation;
+  VkImageView image_view;
+};
+
 struct Renderer {
   struct Window window;
   struct Vulkan vulkan;
@@ -57,6 +68,7 @@ struct Renderer {
   VkQueue graphicsQueue;
   VmaAllocator allocator;
   struct Swapchain swapchain;
+  struct Depth depth;
 };
 
 struct Renderer Renderer = {0};
@@ -92,12 +104,18 @@ void VkResultLog(VkResult result) {
     return SDL_APP_FAILURE;                                                    \
   }
 
+
+SDL_AppResult APP_SwapchainCreate();
+void APP_SwapchainDestroy();
+SDL_AppResult APP_ShadersCreate();
+
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   SDL_ResultCheck(SDL_Init(SDL_INIT_VIDEO));
   Renderer.window.width = 800;
   Renderer.window.height = 600;
   Renderer.swapchain.format = APP_COLOR_FORMAT;
-
+  Renderer.depth.format = APP_DEPTH_FORMAT;
+  
   Renderer.window.sdl_window =
       SDL_CreateWindow("Vulkan + SDL3", Renderer.window.width,
                        Renderer.window.height, SDL_WINDOW_VULKAN);
@@ -395,6 +413,63 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
   // Creating swapchain
   //------------------------------------------------------------------------------------------------------
+  if (APP_SwapchainCreate() == SDL_APP_FAILURE) {
+    return SDL_APP_FAILURE;
+  }
+
+  // Creating shaders
+  //------------------------------------------------------------------------------------------------------
+  if (APP_ShadersCreate() == SDL_APP_FAILURE) {
+    return SDL_APP_FAILURE
+  }    
+  
+  
+  return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult SDL_AppIterate(void *appstate) { return SDL_APP_CONTINUE; }
+
+SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
+  switch (event->type) {
+  case SDL_EVENT_KEY_DOWN:
+    switch (event->key.scancode) {
+    case SDL_SCANCODE_ESCAPE:
+      return SDL_APP_SUCCESS;
+    default:
+      return SDL_APP_CONTINUE;
+    }
+  }
+  return SDL_APP_CONTINUE;
+}
+
+void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+  APP_SwapchainDestroy();
+
+
+  if (Renderer.allocator) {
+    vmaDestroyAllocator(Renderer.allocator);
+  }    
+
+  if (Renderer.vulkan.device) {
+    vkDestroyDevice(Renderer.vulkan.device, NULL);
+  }
+  if (Renderer.vulkan.surface) {
+    vkDestroySurfaceKHR(Renderer.vulkan.instance, Renderer.vulkan.surface,
+                        NULL);
+  }
+  if (Renderer.vulkan.instance) {
+    vkDestroyInstance(Renderer.vulkan.instance, NULL);
+  }
+
+  
+  
+  volkFinalize();
+}
+
+
+SDL_AppResult APP_SwapchainCreate() {
+  // Creating swapchain
+  //------------------------------------------------------------------------------------------------------
   Renderer.swapchain.width = Renderer.window.width;
   Renderer.swapchain.height = Renderer.window.height;
 
@@ -442,47 +517,116 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
       Renderer.vulkan.device, Renderer.swapchain.vk_swapchain,
       &Renderer.swapchain.image_count, Renderer.swapchain.images);
   SDL_Log(APP_OK "Swapchain images loaded");
-
+  
+  SDL_Log(APP_WAIT "Creating swapchain imageviews");
   Renderer.swapchain.image_view_count = Renderer.swapchain.image_count;
+  Renderer.swapchain.image_views = malloc(Renderer.swapchain.image_view_count*sizeof(VkImageView));
   
-
-  
-  return SDL_APP_CONTINUE;
-}
-
-SDL_AppResult SDL_AppIterate(void *appstate) { return SDL_APP_CONTINUE; }
-
-SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
-  switch (event->type) {
-  case SDL_EVENT_KEY_DOWN:
-    switch (event->key.scancode) {
-    case SDL_SCANCODE_ESCAPE:
-      return SDL_APP_SUCCESS;
-    default:
-      return SDL_APP_CONTINUE;
-    }
+  for (uint32_t i = 0; i < Renderer.swapchain.image_count; i++) {
+    VkImageViewCreateInfo image_view_info = {0};
+    image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    image_view_info.image = Renderer.swapchain.images[i];
+    image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    image_view_info.format = Renderer.swapchain.format;
+    image_view_info.subresourceRange =
+        (VkImageSubresourceRange){.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT,
+                                  .baseMipLevel = 0,
+                                  .levelCount = 1,
+                                  .baseArrayLayer = 0,
+                                  .layerCount = 1};
+    VkResultCheck(vkCreateImageView(Renderer.vulkan.device, &image_view_info, NULL, &Renderer.swapchain.image_views[i]));
   }
+  SDL_Log(APP_OK"Swapchain imageviews created");
+
+  SDL_Log(APP_WAIT "Creating swapchain semaphores");
+  Renderer.swapchain.semaphore_count = Renderer.swapchain.image_count;
+  Renderer.swapchain.semaphores =
+      malloc(Renderer.swapchain.semaphore_count * sizeof(VkSemaphore));
+  
+  for (uint32_t i = 0; i < Renderer.swapchain.semaphore_count; i++) {
+    VkSemaphoreCreateInfo semaphore_info = {0};
+    semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    VkResultCheck(vkCreateSemaphore(Renderer.vulkan.device, &semaphore_info,
+                                    NULL, &Renderer.swapchain.semaphores[i]));
+  }
+  SDL_Log(APP_OK"Swapchain semaphores created");
+
+  // Creating depth buffer
+  //------------------------------------------------------------------------------------------------------
+  SDL_Log(APP_WAIT "Creating depth buffer");
+  VkImageCreateInfo depth_create_info = {0};
+  depth_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+  depth_create_info.imageType = VK_IMAGE_TYPE_2D;
+  depth_create_info.format = Renderer.depth.format;
+  depth_create_info.extent = (VkExtent3D){
+    .width = Renderer.swapchain.width, .height = Renderer.swapchain.height,
+    .depth = 1};
+  depth_create_info.mipLevels = 1;
+  depth_create_info.arrayLayers = 1;
+  depth_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
+  depth_create_info.tiling = VK_IMAGE_TILING_OPTIMAL;
+  depth_create_info.usage = VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT;
+  depth_create_info.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+
+  VmaAllocationCreateInfo alloc_info = {
+      .flags = VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
+      .usage = VMA_MEMORY_USAGE_AUTO};
+
+  VkResultCheck(vmaCreateImage(Renderer.allocator, &depth_create_info,
+                               &alloc_info, &Renderer.depth.image, &Renderer.depth.image_allocation, NULL));
+  SDL_Log(APP_OK "Depth buffer created");
+
+  SDL_Log(APP_WAIT "Creating depth buffer image view");
+  VkImageViewCreateInfo depth_image_view_info = {0};
+  depth_image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+  depth_image_view_info.image = Renderer.depth.image;
+  depth_image_view_info.format = Renderer.depth.format;
+  depth_image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
+  depth_image_view_info.subresourceRange =
+      (VkImageSubresourceRange){.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
+                                .layerCount = 1,
+                                .levelCount = 1};
+  VkResultCheck(vkCreateImageView(Renderer.vulkan.device,
+                                  &depth_image_view_info, NULL,
+                                  &Renderer.depth.image_view));
+  SDL_Log(APP_OK"Depth buffer image view created");
   return SDL_APP_CONTINUE;
 }
 
-void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+void APP_SwapchainDestroy() {
+  SDL_Log(APP_WAIT "Destroying swapchain");
+  for (uint32_t i = 0; i < Renderer.swapchain.image_view_count; i++) {
+    vkDestroyImageView(Renderer.vulkan.device, Renderer.swapchain.image_views[i], NULL);
+  }
+
+  for (uint32_t i = 0; i < Renderer.swapchain.semaphore_count; i++) {
+    vkDestroySemaphore(Renderer.vulkan.device, Renderer.swapchain.semaphores[i], NULL);
+  }
+
   if (Renderer.swapchain.vk_swapchain) {
     vkDestroySwapchainKHR(Renderer.vulkan.device,
                           Renderer.swapchain.vk_swapchain, NULL);
+    Renderer.swapchain.vk_swapchain = NULL;
   }
 
-  if (Renderer.allocator) {
-    vmaDestroyAllocator(Renderer.allocator);
+  if (Renderer.depth.image_view) {
+    vkDestroyImageView(Renderer.vulkan.device, Renderer.depth.image_view, NULL);
+    vmaDestroyImage(Renderer.allocator, Renderer.depth.image,
+                    Renderer.depth.image_allocation);
+    Renderer.depth.image_view = NULL;
   }
-  if (Renderer.vulkan.device) {
-    vkDestroyDevice(Renderer.vulkan.device, NULL);
-  }
-  if (Renderer.vulkan.surface) {
-    vkDestroySurfaceKHR(Renderer.vulkan.instance, Renderer.vulkan.surface,
-                        NULL);
-  }
-  if (Renderer.vulkan.instance) {
-    vkDestroyInstance(Renderer.vulkan.instance, NULL);
-  }
-  volkFinalize();
+  SDL_Log(APP_OK"Swapchain destroyed");
 }
+
+
+
+// SHADER CREATION AND COMPILATION
+
+VkShaderModule APP_ShaderModuleCreate(char* file_name, shaderc_shader_kind kind) {
+  
+}  
+
+SDL_AppResult APP_ShadersCreate() {
+  
+
+}  

@@ -15,11 +15,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Vulkan App
 add_executable(vulkan_app main.c vk_mem_alloc.cpp)
 
-find_package(Vulkan REQUIRED COMPONENTS volk)
+find_package(Vulkan REQUIRED COMPONENTS volk shaderc_combined)
 find_package(SDL3 REQUIRED)
 
-
 # Link the imported targets
-target_link_libraries(vulkan_app PRIVATE Vulkan::volk SDL3::SDL3)
+target_link_libraries(vulkan_app PRIVATE Vulkan::volk SDL3::SDL3 Vulkan::shaderc_combined)
 
 
