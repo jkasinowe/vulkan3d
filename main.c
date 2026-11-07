@@ -1,17 +1,7 @@
-#include <SDL3/SDL_error.h>
-#include <SDL3/SDL_log.h>
-#include <shaderc/env.h>
-#include <shaderc/status.h>
-#include <stdint.h>
-#include <string.h>
-
 #define SDL_MAIN_USE_CALLBACKS 1
 #define VK_NO_PROTOTYPES
 #include <volk.h>
-
 #include <shaderc/shaderc.h>
-
-
 #include <SDL3/SDL.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_main.h>
@@ -22,12 +12,21 @@
 #include <vulkan/vk_enum_string_helper.h>
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
+#include <SDL3/SDL_error.h>
+#include <SDL3/SDL_log.h>
+#include <shaderc/env.h>
+#include <shaderc/status.h>
+#include <stdint.h>
+#include <string.h>
+
 
 #define ARRLEN(x) (sizeof(x) / sizeof(*x))
 
 #define APP_COLOR_FORMAT VK_FORMAT_B8G8R8A8_SRGB
 #define APP_DEPTH_FORMAT VK_FORMAT_D32_SFLOAT
 #define APP_SHADER_PATH "src/shaders/"
+#define APP_MAX_FRAMES_IN_FLIGHT 2
+
 
 
 struct Window {
@@ -53,6 +52,18 @@ struct Swapchain {
 #define APP_OK "OK:    "
 #define APP_ERROR "ERROR: "
 
+struct Shader {
+  VkShaderModule vertex;
+  VkShaderModule fragment;
+};
+
+struct FrameResources {
+  VkCommandPool commandPool;
+  VkCommandBuffer commandBuffer;
+  VkSemaphore imageAcquiredSemaphore;
+};
+
+
 struct Vulkan {
   uint32_t version;
   uint32_t instanceExtensionCount;
@@ -61,6 +72,11 @@ struct Vulkan {
   VkSurfaceKHR surface;
   VkPhysicalDevice physicalDevice;
   VkDevice device;
+  struct Shader shader;
+  VkPipelineLayout pipelineLayout;
+  VkPipeline pipeline;
+  VkSemaphore timelineSemapthore;
+  struct FrameResources framesInFlight[APP_MAX_FRAMES_IN_FLIGHT];
 };
 
 struct Depth {
@@ -69,6 +85,7 @@ struct Depth {
   VmaAllocation image_allocation;
   VkImageView image_view;
 };
+
 
 struct Renderer {
   struct Window window;
@@ -117,6 +134,14 @@ void VkResultLog(VkResult result) {
 SDL_AppResult APP_SwapchainCreate();
 void APP_SwapchainDestroy();
 SDL_AppResult APP_ShadersCreate();
+void APP_ShadersDestroy();
+SDL_AppResult APP_PipelineCreate(VkPipeline* pipeline);
+void APP_PipelineDestroy(VkPipeline *pipeline);
+SDL_AppResult APP_SyncResourcesCreate();
+void APP_SyncResourcesDestroy();
+SDL_AppResult APP_CommandBuffersCreate();
+
+
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   SDL_ResultCheck(SDL_Init(SDL_INIT_VIDEO));
@@ -430,8 +455,20 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   //------------------------------------------------------------------------------------------------------
   if (APP_ShadersCreate() == SDL_APP_FAILURE) {
     return SDL_APP_FAILURE;
-  }    
+  }
+
+  // Creating pipeline
+  //------------------------------------------------------------------------------------------------------
   
+  if (APP_PipelineCreate(&Renderer.vulkan.pipeline) == SDL_APP_FAILURE) {
+    return SDL_APP_FAILURE;
+  }
+
+  if (APP_SyncResourcesCreate() == SDL_APP_FAILURE) {
+    return SDL_APP_FAILURE;
+  }
+  
+
   
   return SDL_APP_CONTINUE;
 }
@@ -452,8 +489,11 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 }
 
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
-  APP_SwapchainDestroy();
 
+  APP_SyncResourcesDestroy();
+  APP_PipelineDestroy(&Renderer.vulkan.pipeline);
+  APP_ShadersDestroy();
+  APP_SwapchainDestroy();
 
   if (Renderer.allocator) {
     vmaDestroyAllocator(Renderer.allocator);
@@ -469,6 +509,8 @@ void SDL_AppQuit(void *appstate, SDL_AppResult result) {
   if (Renderer.vulkan.instance) {
     vkDestroyInstance(Renderer.vulkan.instance, NULL);
   }
+
+  
 
   
   
@@ -593,8 +635,8 @@ SDL_AppResult APP_SwapchainCreate() {
   depth_image_view_info.viewType = VK_IMAGE_VIEW_TYPE_2D;
   depth_image_view_info.subresourceRange =
       (VkImageSubresourceRange){.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT,
-                                .layerCount = 1,
-                                .levelCount = 1};
+                                .levelCount = 1,
+                                .layerCount = 1};
   VkResultCheck(vkCreateImageView(Renderer.vulkan.device,
                                   &depth_image_view_info, NULL,
                                   &Renderer.depth.image_view));
@@ -684,11 +726,203 @@ SDL_AppResult APP_ShaderModuleCreate(const char *file_name,
 }
 
 SDL_AppResult APP_ShadersCreate() {
-  VkShaderModule shader_module = NULL;
   if (APP_ShaderModuleCreate("shader.vs", shaderc_vertex_shader, "main",
-                             &shader_module) == SDL_APP_FAILURE) {
+                             &Renderer.vulkan.shader.vertex) == SDL_APP_FAILURE) {
+    return SDL_APP_FAILURE;
+  }
+  
+  if (APP_ShaderModuleCreate("shader.fs", shaderc_fragment_shader, "main",
+                             &Renderer.vulkan.shader.fragment) == SDL_APP_FAILURE) {
     return SDL_APP_FAILURE;
   }
   
   return SDL_APP_CONTINUE;
+}
+
+void APP_ShadersDestroy() {
+  SDL_Log(APP_WAIT"Destroying shaders");
+  vkDestroyShaderModule(Renderer.vulkan.device, Renderer.vulkan.shader.vertex,
+                        NULL);
+  vkDestroyShaderModule(Renderer.vulkan.device, Renderer.vulkan.shader.fragment,
+                        NULL);
+  SDL_Log(APP_OK"Shaders destroyed");  
+}
+
+
+SDL_AppResult APP_PipelineCreate(VkPipeline *pipeline) {
+  VkPipelineLayoutCreateInfo layout_info = {0};
+  layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  layout_info.setLayoutCount = 0;
+  layout_info.pushConstantRangeCount = 0;
+
+  SDL_Log(APP_WAIT "Creating pipeline layout");
+  VkResultCheck(vkCreatePipelineLayout(Renderer.vulkan.device, &layout_info,
+                                       NULL, &Renderer.vulkan.pipelineLayout));
+  SDL_Log(APP_OK "Pipeline layout created");
+  SDL_Log(APP_WAIT "Creating pipeline");
+
+  const char *entrypoint = "main";
+  VkPipelineShaderStageCreateInfo shader_stages[] = {
+      (VkPipelineShaderStageCreateInfo){
+          .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+          .stage = VK_SHADER_STAGE_VERTEX_BIT,
+          .module = Renderer.vulkan.shader.vertex,
+          .pName = entrypoint},
+      (VkPipelineShaderStageCreateInfo){
+          .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
+          .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
+          .module = Renderer.vulkan.shader.fragment,
+          .pName = entrypoint}};
+
+  // Primitive topology triangles
+  VkPipelineVertexInputStateCreateInfo vert_input_info = {0};
+  vert_input_info.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+
+  VkPipelineInputAssemblyStateCreateInfo input_assembly_info = {0};
+  input_assembly_info.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+  input_assembly_info.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+  // Depth testing
+  VkPipelineDepthStencilStateCreateInfo depth_stencil_info = {0};
+  depth_stencil_info.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+  depth_stencil_info.depthTestEnable = VK_TRUE;
+  depth_stencil_info.depthWriteEnable = VK_TRUE;
+  depth_stencil_info.depthCompareOp = VK_COMPARE_OP_LESS;
+  depth_stencil_info.stencilTestEnable = VK_FALSE;
+
+  // Viewport
+  VkPipelineViewportStateCreateInfo viewport_info = {0};
+  viewport_info.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+  viewport_info.viewportCount = 1;
+  viewport_info.pViewports = NULL;
+  viewport_info.scissorCount = 1;
+  viewport_info.pScissors = NULL;
+
+  // Rasterization
+  VkPipelineRasterizationStateCreateInfo raster_info = {0};
+  raster_info.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+  raster_info.polygonMode = VK_POLYGON_MODE_FILL;
+  raster_info.cullMode = VK_CULL_MODE_BACK_BIT;
+  raster_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+  raster_info.lineWidth = 1.0f;
+
+  // Multisampling
+  VkPipelineMultisampleStateCreateInfo multisampling_info = {0};
+  multisampling_info.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+  multisampling_info.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+  // Alpha blending
+  VkPipelineColorBlendAttachmentState attachment_state = {0};
+  attachment_state.blendEnable = VK_FALSE;
+  attachment_state.colorWriteMask =
+      VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+      VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+
+  VkPipelineColorBlendStateCreateInfo blend_info = {0};
+  blend_info.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+  blend_info.attachmentCount = 1;
+  blend_info.pAttachments = &attachment_state;
+
+
+  // Enable dynamic state
+  VkDynamicState dynamic_state[] = {
+      VK_DYNAMIC_STATE_VIEWPORT,
+      VK_DYNAMIC_STATE_SCISSOR,
+  };
+  VkPipelineDynamicStateCreateInfo dynamic_state_info = {0};
+  dynamic_state_info.sType =
+      VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+  dynamic_state_info.dynamicStateCount = ARRLEN(dynamic_state);
+  dynamic_state_info.pDynamicStates = dynamic_state;
+
+
+  // Dynamic rendering
+  VkPipelineRenderingCreateInfo render_info = {0};
+  render_info.sType = VK_STRUCTURE_TYPE_PIPELINE_RENDERING_CREATE_INFO;
+  render_info.colorAttachmentCount = 1;
+  render_info.pColorAttachmentFormats = &Renderer.swapchain.format;
+  render_info.depthAttachmentFormat = Renderer.depth.format;
+
+  // Graphics pipeline
+  VkGraphicsPipelineCreateInfo pipeline_info = {0};
+  pipeline_info.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+  pipeline_info.pNext = &render_info; // for dynamic rendering
+  pipeline_info.stageCount = ARRLEN(shader_stages);
+  pipeline_info.pStages = shader_stages; // Shader stages with VkShader's
+  pipeline_info.pVertexInputState = &vert_input_info; // blank vertex input state
+  pipeline_info.pInputAssemblyState = &input_assembly_info; // triangle list topology
+  pipeline_info.pViewportState = &viewport_info; // single viewport and scissor test, but dynamicaly
+  pipeline_info.pRasterizationState = &raster_info; // culling backfaces, front direction CCW
+  pipeline_info.pMultisampleState = &multisampling_info; // no multisampling
+  pipeline_info.pDepthStencilState = &depth_stencil_info; // depth testing and writing on
+  pipeline_info.pColorBlendState = &blend_info; // one color attachment
+  pipeline_info.pDynamicState = &dynamic_state_info; // viewport and scissor states are dynamic
+  pipeline_info.layout = Renderer.vulkan.pipelineLayout; // pipeline doesn't expect any descriptors
+  pipeline_info.renderPass = VK_NULL_HANDLE; // not using render passes, dynamic rendering
+
+  *pipeline = (VkPipeline){0};
+  VkResultCheck(vkCreateGraphicsPipelines(Renderer.vulkan.device, NULL, 1,
+                                          &pipeline_info, NULL, pipeline));
+
+  SDL_Log(APP_OK "Pipeline created");  
+  return SDL_APP_CONTINUE;
+}
+
+void APP_PipelineDestroy(VkPipeline *pipeline) {
+  vkDestroyPipeline(Renderer.vulkan.device, *pipeline, NULL);
+  vkDestroyPipelineLayout(Renderer.vulkan.device, Renderer.vulkan.pipelineLayout, NULL);
+}
+
+SDL_AppResult APP_SyncResourcesCreate() {
+
+  // Timeline semaphore needed for sync between cpu and gpu
+  VkSemaphoreTypeCreateInfo semaphore_type_info = {0};
+  semaphore_type_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO;
+  semaphore_type_info.semaphoreType = VK_SEMAPHORE_TYPE_TIMELINE;
+  semaphore_type_info.initialValue = APP_MAX_FRAMES_IN_FLIGHT;
+
+  VkSemaphoreCreateInfo semaphore_info = {0};
+  semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+  semaphore_info.pNext = &semaphore_type_info;
+
+  SDL_Log(APP_WAIT"Creating timeline semaphore");
+  VkResultCheck(vkCreateSemaphore(Renderer.vulkan.device, &semaphore_info, NULL,
+                                  &Renderer.vulkan.timelineSemapthore));
+  SDL_Log(APP_OK"Timeline semaphore created");
+
+
+  SDL_Log(APP_WAIT"Creating frame semaphores");
+  for (uint32_t i = 0; i < APP_MAX_FRAMES_IN_FLIGHT; i++) {
+    VkSemaphoreCreateInfo semaphore_info = {0};
+    semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+    VkResultCheck(vkCreateSemaphore(
+        Renderer.vulkan.device, &semaphore_info, NULL,
+        &Renderer.vulkan.framesInFlight[i].imageAcquiredSemaphore));
+  }
+  SDL_Log(APP_OK"Frame semaphores created");
+  
+  return SDL_APP_CONTINUE;
+}
+
+void APP_SyncResourcesDestroy() {
+  SDL_Log(APP_WAIT"Destroying frame semaphores");
+  for (uint32_t i = 0; i < APP_MAX_FRAMES_IN_FLIGHT; i++) {
+    vkDestroySemaphore(Renderer.vulkan.device,
+                       Renderer.vulkan.framesInFlight[i].imageAcquiredSemaphore,
+                       NULL);
+  }
+  SDL_Log(APP_OK "Frame semaphores destroyed");
+  SDL_Log(APP_WAIT"Destroying timeline semaphore");  
+  vkDestroySemaphore(Renderer.vulkan.device, Renderer.vulkan.timelineSemapthore, NULL);
+  SDL_Log(APP_OK"Timeline semaphore destroyed");
+}
+
+
+SDL_AppResult APP_CommandBuffersCreate() {
+
 }  
