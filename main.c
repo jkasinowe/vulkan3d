@@ -20,8 +20,8 @@ struct Window {
   uint32_t height;
 };
 
-#define APP_WAIT "WAIT: "
-#define APP_OK "OK: "
+#define APP_WAIT  "WAIT:  "
+#define APP_OK    "OK:    "
 #define APP_ERROR "ERROR: "
 
 struct Renderer {
@@ -243,8 +243,6 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 
   // Creating device
   //------------------------------------------------------------------------------------------------------
-  SDL_Log(APP_WAIT"Creating the logical device");
-
   VkPhysicalDeviceVulkan14Features supported_features_14 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
       .pNext = NULL};
@@ -259,29 +257,31 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
       .pNext = &supported_features_12};
   vkGetPhysicalDeviceFeatures2(Renderer.physicalDevice, &supported_features);
 
+  SDL_Log(APP_WAIT"Checking for available physical device features");
   if (!supported_features_13.dynamicRendering ||
       !supported_features_13.synchronization2 ||
       !supported_features_12.timelineSemaphore) {
     SDL_Log(APP_ERROR "Physical device doesn't meet the feature requirements");
     return SDL_APP_FAILURE;
   }
-
+  SDL_Log(APP_OK"Physical device meets the feature requirements");
+  
   VkPhysicalDeviceVulkan14Features requested_features_14 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
       .pNext = NULL};
   VkPhysicalDeviceVulkan13Features requested_features_13 = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
       .pNext = &requested_features_14,
       .synchronization2 = VK_TRUE, // modernized synchronization
       .dynamicRendering = VK_TRUE}; // no renderpass/subpasses
 
   VkPhysicalDeviceVulkan12Features requested_features_12 = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
       .pNext = &requested_features_13, // streamlined multi-frame-in-flight handling
       .timelineSemaphore = VK_TRUE};
   
   VkPhysicalDeviceFeatures2 requested_features = {
-      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_4_FEATURES,
+      .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_1_FEATURES,
       .pNext = &requested_features_12};
 
   float queue_priorities[] = {1.0f};
@@ -298,9 +298,17 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   device_create_info.pNext = &requested_features;
   device_create_info.queueCreateInfoCount = 1;
   device_create_info.pQueueCreateInfos = &queue_create_info;
-    
+  device_create_info.enabledExtensionCount = ARRLEN(device_extensions);
+  device_create_info.ppEnabledExtensionNames = device_extensions;
+  device_create_info.pEnabledFeatures = NULL;
 
-  
+  SDL_Log(APP_WAIT"Creating device");
+  VkResultCheck(vkCreateDevice(Renderer.physicalDevice, &device_create_info, NULL, &Renderer.device));
+  SDL_Log(APP_OK "Device created");
+
+  SDL_Log(APP_WAIT"Getting device queue");
+  vkGetDeviceQueue(Renderer.device, Renderer.graphicsQueueFamilyId, 0, &Renderer.graphicsQueue);
+  SDL_Log(APP_OK "Device queue ready");
   
   return SDL_APP_CONTINUE;
 }
@@ -321,6 +329,9 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
 }
 
 void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+  if (Renderer.device) {
+    vkDestroyDevice(Renderer.device, NULL);
+  }    
   if (Renderer.vulkanSurface) {
     vkDestroySurfaceKHR(Renderer.vulkanInstance, Renderer.vulkanSurface, NULL);
   }    
