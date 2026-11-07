@@ -467,8 +467,10 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   if (APP_SyncResourcesCreate() == SDL_APP_FAILURE) {
     return SDL_APP_FAILURE;
   }
-  
 
+  if (APP_CommandBuffersCreate() == SDL_APP_FAILURE) {
+    return SDL_APP_FAILURE;
+  }    
   
   return SDL_APP_CONTINUE;
 }
@@ -924,5 +926,28 @@ void APP_SyncResourcesDestroy() {
 
 
 SDL_AppResult APP_CommandBuffersCreate() {
+  SDL_Log(APP_WAIT"Creating frames in flight command buffers");
+  for (uint32_t i = 0; i < APP_MAX_FRAMES_IN_FLIGHT; i++) {
+    VkCommandPoolCreateInfo pool_info = {0};
+    pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+    pool_info.queueFamilyIndex = Renderer.graphicsQueueFamilyId;
+    VkResultCheck(
+        vkCreateCommandPool(Renderer.vulkan.device, &pool_info, NULL,
+                            &Renderer.vulkan.framesInFlight[i].commandPool));
+    
 
+    VkCommandBufferAllocateInfo command_alloc_info = {0};
+    command_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    command_alloc_info.commandPool =
+        Renderer.vulkan.framesInFlight[i].commandPool;
+    command_alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    command_alloc_info.commandBufferCount = 1;
+
+    VkResultCheck(vkAllocateCommandBuffers(
+        Renderer.vulkan.device, &command_alloc_info,
+        &Renderer.vulkan.framesInFlight[i].commandBuffer));
+  }
+  SDL_Log(APP_OK "Frames in flight command buffer created");
+
+  return SDL_APP_CONTINUE;
 }  
