@@ -480,7 +480,8 @@ SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
-
+  SDL_Log("Frame %d", Renderer.frameIndex); 
+  
   if (Renderer.swapchain.requireRecreate) {
     vkDeviceWaitIdle(Renderer.vulkan.device);
     APP_SwapchainDestroy();
@@ -589,14 +590,16 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
   color_attach_info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
   color_attach_info.storeOp = VK_ATTACHMENT_STORE_OP_STORE;
   color_attach_info.clearValue = (VkClearValue){0.1f, 0.1f, 0.1f, 1};
+  color_attach_info.pNext = NULL;
 
   VkRenderingAttachmentInfo depth_attach_info = {0};
-  color_attach_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
-  color_attach_info.imageView = Renderer.depth.image_view;
-  color_attach_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
-  color_attach_info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
-  color_attach_info.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
-  color_attach_info.clearValue = (VkClearValue){1.0f, 0};
+  depth_attach_info.sType = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO;
+  depth_attach_info.imageView = Renderer.depth.image_view;
+  depth_attach_info.imageLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+  depth_attach_info.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;
+  depth_attach_info.storeOp = VK_ATTACHMENT_STORE_OP_DONT_CARE;
+  depth_attach_info.clearValue = (VkClearValue){1.0f, 0};
+  depth_attach_info.pNext = NULL;
 
   VkRenderingInfo rendering_info = {0};
   rendering_info.sType = VK_STRUCTURE_TYPE_RENDERING_INFO;
