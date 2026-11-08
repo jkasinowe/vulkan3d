@@ -13,7 +13,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 
 # Vulkan App
-add_executable(vulkan_app main.c vk_mem_alloc.cpp)
+add_executable(vulkan_app
+src/main.c
+src/app_renderer.c
+src/app_graphics.c
+src/app_callbacks.c
+src/vk_mem_alloc.cpp
+)
 
 set_target_properties(vulkan_app PROPERTIES LINKER_LANGUAGE CXX)
 
