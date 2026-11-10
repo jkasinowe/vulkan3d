@@ -329,18 +329,22 @@ SDL_AppResult APP_VulkanBufferCreate(
 SDL_AppResult APP_VulkanUniformBufferObjectUpdate() {
   SDL_Log(APP_WAIT "Updating uniform buffer object");
   struct UniformBufferObject *ubo = &Renderer.vulkan.pipeline.uniform.bufferObject;
-  ubo->windowSize[0] = Renderer.window.width;
-  ubo->windowSize[1] = Renderer.window.height;
-  ubo->time = SDL_GetTicks()/1000.0f;
+  ubo->screenSize[0] = Renderer.window.width;
+  ubo->screenSize[1] = Renderer.window.height;
+  ubo->time = SDL_GetTicks() / 1000.0f;
 
-  VmaAllocationInfo *alloc_info = &Renderer.vulkan.pipeline.uniform.buffers.allocationInfo[Renderer.swapchain.imageIndex];
-  SDL_Log("OK?");  
-  void *mapped_data = alloc_info->pMappedData;
-  SDL_Log("OK??");
+  memcpy(ubo->player_position, Player.position, sizeof(float) * 3);
+  memcpy(ubo->sphere_position, Sphere.position, sizeof(float) * 3);
+  memcpy(ubo->light_direction, Light.direction, sizeof(float) * 3);
+  memcpy(ubo->ambient_color, Light.ambientColor, sizeof(float) * 3);  
   
+  
+  ubo->sphere_radius = Sphere.radius;
+  
+  VmaAllocationInfo *alloc_info = &Renderer.vulkan.pipeline.uniform.buffers.allocationInfo[Renderer.swapchain.imageIndex];
+  void *mapped_data = alloc_info->pMappedData;
   memcpy(mapped_data, ubo,
          sizeof(Renderer.vulkan.pipeline.uniform.bufferObject));
-  SDL_Log("OK???");
   SDL_Log(APP_OK "Uniform buffer object updated");  
   return SDL_APP_CONTINUE;
 }
@@ -913,7 +917,8 @@ SDL_AppResult APP_VulkanDeviceCreate() {
   if (!supported_features_13.dynamicRendering ||
       !supported_features_13.synchronization2 ||
       !supported_features_12.timelineSemaphore ||
-      !supported_features_12.bufferDeviceAddress) {
+      !supported_features_12.bufferDeviceAddress ||
+      !supported_features_12.scalarBlockLayout) {
     SDL_Log(APP_ERROR "Physical device doesn't meet the feature requirements");
     return SDL_APP_FAILURE;
   }
@@ -931,6 +936,8 @@ SDL_AppResult APP_VulkanDeviceCreate() {
   VkPhysicalDeviceVulkan12Features requested_features_12 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
       .bufferDeviceAddress = VK_TRUE,
+      .scalarBlockLayout = VK_TRUE,
+
       .pNext =
           &requested_features_13, // streamlined multi-frame-in-flight handling
       .timelineSemaphore = VK_TRUE};

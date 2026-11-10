@@ -63,9 +63,13 @@ struct FrameResources {
 };
 
 struct UniformBufferObject {
-  float windowSize[2];
+  float screenSize[2];
   float time;
-  
+  float player_position[3];
+  float sphere_position[3];
+  float sphere_radius;
+  float light_direction[3];
+  float ambient_color[3];
 };
 
 struct Buffers {
@@ -124,6 +128,10 @@ struct Renderer {
 };
 
 extern struct Renderer Renderer;
+extern struct Player Player;
+extern struct Sphere Sphere;
+extern struct Light Light;
+
 
 VKAPI_ATTR VkBool32 VKAPI_CALL LOG_DebugCallback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,

@@ -19,6 +19,7 @@ src/app_renderer.c
 src/app_graphics.c
 src/app_callbacks.c
 src/vk_mem_alloc.cpp
+src/app_game.c
 )
 
 set_target_properties(vulkan_app PROPERTIES LINKER_LANGUAGE CXX)
