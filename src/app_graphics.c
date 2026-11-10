@@ -1,4 +1,5 @@
 #include "app_internall.h"
+#include <SDL3/SDL_init.h>
 
 SDL_AppResult APP_GraphicsInit() {
 // Initializing rendering data
@@ -64,6 +65,27 @@ SDL_AppResult APP_GraphicsInit() {
     return SDL_APP_FAILURE;
   }
 
+  // Creating uniform buffer object
+  //------------------------------------------------------------------------------------------------------
+  if (APP_VulkanUniformBuffersCreate(&Renderer.vulkan.pipeline.uniform)) {
+    return SDL_APP_FAILURE;
+  }
+
+  // Creating descriptor set layout
+  //------------------------------------------------------------------------------------------------------
+  if (APP_VulkanDescriptorSetLayoutCreate()) {    
+    return SDL_APP_FAILURE;
+  }
+
+  if (APP_VulkanDescriptorPoolCreate()) {
+    return SDL_APP_FAILURE;
+  }
+
+  
+  if (APP_VulkanDescriptorSetsCreate()) {
+    return SDL_APP_FAILURE;
+  }    
+  
   // Creating pipeline
   //------------------------------------------------------------------------------------------------------
   if (APP_VulkanPipelineCreate(&Renderer.vulkan.pipeline) == SDL_APP_FAILURE) {

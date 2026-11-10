@@ -1,20 +1,50 @@
 #include "app_internall.h"
+#include <SDL3/SDL_init.h>
+#include <SDL3/SDL_oldnames.h>
+#include <SDL3/SDL_video.h>
+#include <shaderc/shaderc.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <stdlib.h>
+#include <vulkan/vulkan_core.h>
 
 struct Renderer Renderer;
+
 SDL_AppResult APP_VulkanSwapchainCreate() {
   // Creating swapchain
   //------------------------------------------------------------------------------------------------------
+  APP_RendererWindowSizeUpdate();
   Renderer.swapchain.width = Renderer.window.width;
   Renderer.swapchain.height = Renderer.window.height;
   Renderer.swapchain.requireRecreate = false;
-  
+
   VkSurfaceCapabilitiesKHR surface_capabilities = {0};
   SDL_Log(APP_WAIT "Getting surface capabilities");
   VkResultCheck(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
       Renderer.vulkan.physicalDevice, Renderer.vulkan.surface,
       &surface_capabilities));
+  uint32_t present_mode_count = 0;
+  VkResultCheck(vkGetPhysicalDeviceSurfacePresentModesKHR(
+      Renderer.vulkan.physicalDevice, Renderer.vulkan.surface,
+      &present_mode_count, NULL));
+  VkPresentModeKHR *present_modes =
+      malloc(sizeof(VkPresentModeKHR) * present_mode_count);
+  VkResultCheck(vkGetPhysicalDeviceSurfacePresentModesKHR(
+      Renderer.vulkan.physicalDevice, Renderer.vulkan.surface,
+      &present_mode_count, present_modes));
+  bool present_mode_needed_found = false;
+  for (uint32_t i = 0; i < present_mode_count; i++) {
+    if (present_modes[i] == VK_PRESENT_MODE_FIFO_KHR) {
+      present_mode_needed_found = true;
+      break;
+    }
+  }
+
   SDL_Log(APP_OK "Surface capabilities ready");
+  if (!present_mode_needed_found) {
+    SDL_Log(APP_ERROR "Needed present mode not supported");
+    return SDL_APP_FAILURE;
+  }
 
   uint32_t requested_image_count =
       SDL_max(2, surface_capabilities.minImageCount);
@@ -23,7 +53,6 @@ SDL_AppResult APP_VulkanSwapchainCreate() {
         SDL_min(requested_image_count, surface_capabilities.maxImageCount);
   }
 
-  
   VkSwapchainCreateInfoKHR swapchain_info = {0};
   swapchain_info.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
   swapchain_info.surface = Renderer.vulkan.surface;
@@ -40,26 +69,27 @@ SDL_AppResult APP_VulkanSwapchainCreate() {
 
   SDL_Log(APP_WAIT "Creating swapchain");
   VkResultCheck(vkCreateSwapchainKHR(Renderer.vulkan.device, &swapchain_info,
-                                     NULL, &Renderer.swapchain.vk_swapchain));
+                                     NULL, &Renderer.swapchain.vkSwapchain));
   SDL_Log(APP_OK "Swapchain created");
 
   SDL_Log(APP_WAIT "Loading swapchain images");
   vkGetSwapchainImagesKHR(Renderer.vulkan.device,
-                          Renderer.swapchain.vk_swapchain,
-                          &Renderer.swapchain.image_count, NULL);
+                          Renderer.swapchain.vkSwapchain,
+                          &Renderer.swapchain.imageCount, NULL);
   Renderer.swapchain.images =
-      malloc(Renderer.swapchain.image_count * sizeof(VkImage));
+      malloc(Renderer.swapchain.imageCount * sizeof(VkImage));
 
   vkGetSwapchainImagesKHR(
-      Renderer.vulkan.device, Renderer.swapchain.vk_swapchain,
-      &Renderer.swapchain.image_count, Renderer.swapchain.images);
+      Renderer.vulkan.device, Renderer.swapchain.vkSwapchain,
+      &Renderer.swapchain.imageCount, Renderer.swapchain.images);
   SDL_Log(APP_OK "Swapchain images loaded");
-  
+
   SDL_Log(APP_WAIT "Creating swapchain imageviews");
-  Renderer.swapchain.image_view_count = Renderer.swapchain.image_count;
-  Renderer.swapchain.image_views = malloc(Renderer.swapchain.image_view_count*sizeof(VkImageView));
-  
-  for (uint32_t i = 0; i < Renderer.swapchain.image_count; i++) {
+  Renderer.swapchain.imageViewCount = Renderer.swapchain.imageCount;
+  Renderer.swapchain.imageViews =
+      malloc(Renderer.swapchain.imageViewCount * sizeof(VkImageView));
+
+  for (uint32_t i = 0; i < Renderer.swapchain.imageCount; i++) {
     VkImageViewCreateInfo image_view_info = {0};
     image_view_info.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
     image_view_info.image = Renderer.swapchain.images[i];
@@ -71,23 +101,24 @@ SDL_AppResult APP_VulkanSwapchainCreate() {
                                   .levelCount = 1,
                                   .baseArrayLayer = 0,
                                   .layerCount = 1};
-    VkResultCheck(vkCreateImageView(Renderer.vulkan.device, &image_view_info, NULL, &Renderer.swapchain.image_views[i]));
+    VkResultCheck(vkCreateImageView(Renderer.vulkan.device, &image_view_info,
+                                    NULL, &Renderer.swapchain.imageViews[i]));
   }
-  SDL_Log(APP_OK"Swapchain imageviews created");
+  SDL_Log(APP_OK "Swapchain imageviews created");
 
   SDL_Log(APP_WAIT "Creating swapchain semaphores");
-  Renderer.swapchain.semaphore_count = Renderer.swapchain.image_count;
+  Renderer.swapchain.semaphoreCount = Renderer.swapchain.imageCount;
   Renderer.swapchain.semaphores =
-      malloc(Renderer.swapchain.semaphore_count * sizeof(VkSemaphore));
-  
-  for (uint32_t i = 0; i < Renderer.swapchain.semaphore_count; i++) {
+      malloc(Renderer.swapchain.semaphoreCount * sizeof(VkSemaphore));
+
+  for (uint32_t i = 0; i < Renderer.swapchain.semaphoreCount; i++) {
     VkSemaphoreCreateInfo semaphore_info = {0};
     semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
-    
+
     VkResultCheck(vkCreateSemaphore(Renderer.vulkan.device, &semaphore_info,
                                     NULL, &Renderer.swapchain.semaphores[i]));
   }
-  SDL_Log(APP_OK"Swapchain semaphores created");
+  SDL_Log(APP_OK "Swapchain semaphores created");
 
   // Creating depth buffer
   //------------------------------------------------------------------------------------------------------
@@ -96,9 +127,9 @@ SDL_AppResult APP_VulkanSwapchainCreate() {
   depth_create_info.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
   depth_create_info.imageType = VK_IMAGE_TYPE_2D;
   depth_create_info.format = Renderer.depth.format;
-  depth_create_info.extent = (VkExtent3D){
-    .width = Renderer.swapchain.width, .height = Renderer.swapchain.height,
-    .depth = 1};
+  depth_create_info.extent = (VkExtent3D){.width = Renderer.swapchain.width,
+                                          .height = Renderer.swapchain.height,
+                                          .depth = 1};
   depth_create_info.mipLevels = 1;
   depth_create_info.arrayLayers = 1;
   depth_create_info.samples = VK_SAMPLE_COUNT_1_BIT;
@@ -111,7 +142,8 @@ SDL_AppResult APP_VulkanSwapchainCreate() {
       .usage = VMA_MEMORY_USAGE_AUTO};
 
   VkResultCheck(vmaCreateImage(Renderer.allocator, &depth_create_info,
-                               &alloc_info, &Renderer.depth.image, &Renderer.depth.image_allocation, NULL));
+                               &alloc_info, &Renderer.depth.image,
+                               &Renderer.depth.imageAllocation, NULL));
   SDL_Log(APP_OK "Depth buffer created");
 
   SDL_Log(APP_WAIT "Creating depth buffer image view");
@@ -126,46 +158,46 @@ SDL_AppResult APP_VulkanSwapchainCreate() {
                                 .layerCount = 1};
   VkResultCheck(vkCreateImageView(Renderer.vulkan.device,
                                   &depth_image_view_info, NULL,
-                                  &Renderer.depth.image_view));
-  SDL_Log(APP_OK"Depth buffer image view created");
+                                  &Renderer.depth.imageView));
+  SDL_Log(APP_OK "Depth buffer image view created");
   return SDL_APP_CONTINUE;
 }
 
 void APP_VulkanSwapchainDestroy() {
   SDL_Log(APP_WAIT "Destroying swapchain");
-  for (uint32_t i = 0; i < Renderer.swapchain.image_view_count; i++) {
-    vkDestroyImageView(Renderer.vulkan.device, Renderer.swapchain.image_views[i], NULL);
+  for (uint32_t i = 0; i < Renderer.swapchain.imageViewCount; i++) {
+    vkDestroyImageView(Renderer.vulkan.device, Renderer.swapchain.imageViews[i],
+                       NULL);
   }
 
-  for (uint32_t i = 0; i < Renderer.swapchain.semaphore_count; i++) {
-    vkDestroySemaphore(Renderer.vulkan.device, Renderer.swapchain.semaphores[i], NULL);
+  for (uint32_t i = 0; i < Renderer.swapchain.semaphoreCount; i++) {
+    vkDestroySemaphore(Renderer.vulkan.device, Renderer.swapchain.semaphores[i],
+                       NULL);
   }
 
-  if (Renderer.swapchain.vk_swapchain) {
+  if (Renderer.swapchain.vkSwapchain) {
     vkDestroySwapchainKHR(Renderer.vulkan.device,
-                          Renderer.swapchain.vk_swapchain, NULL);
-    Renderer.swapchain.vk_swapchain = NULL;
+                          Renderer.swapchain.vkSwapchain, NULL);
+    Renderer.swapchain.vkSwapchain = NULL;
   }
 
-  if (Renderer.depth.image_view) {
-    vkDestroyImageView(Renderer.vulkan.device, Renderer.depth.image_view, NULL);
+  if (Renderer.depth.imageView) {
+    vkDestroyImageView(Renderer.vulkan.device, Renderer.depth.imageView, NULL);
     vmaDestroyImage(Renderer.allocator, Renderer.depth.image,
-                    Renderer.depth.image_allocation);
-    Renderer.depth.image_view = NULL;
+                    Renderer.depth.imageAllocation);
+    Renderer.depth.imageView = NULL;
   }
-  SDL_Log(APP_OK"Swapchain destroyed");
+  SDL_Log(APP_OK "Swapchain destroyed");
 }
-
-
 
 // SHADER CREATION AND COMPILATION
 
 SDL_AppResult APP_VulkanShaderModuleCreate(const char *file_name,
-                                     shaderc_shader_kind kind,
-                                     const char *entry_point,
-                                     VkShaderModule *shader_module) {
+                                           shaderc_shader_kind kind,
+                                           const char *entry_point,
+                                           VkShaderModule *shader_module) {
   *shader_module = NULL;
-  
+
   size_t file_path_size = strlen(APP_SHADER_PATH) + strlen(file_name) + 1;
   char *file_path = malloc(sizeof(char) * file_path_size);
   strcpy(file_path, APP_SHADER_PATH);
@@ -179,13 +211,30 @@ SDL_AppResult APP_VulkanShaderModuleCreate(const char *file_name,
     return SDL_APP_FAILURE;
   }
 
-  SDL_Log(APP_WAIT"Compiling shader %s", file_path);
+  SDL_Log(APP_WAIT "Compiling shader %s", file_path);
   shaderc_compiler_t compiler = shaderc_compiler_initialize();
   shaderc_compile_options_t options = shaderc_compile_options_initialize();
-  shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_4);
+  shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan,
+                                         shaderc_env_version_vulkan_1_4);
   shaderc_compile_options_set_target_spirv(options, shaderc_spirv_version_1_6);
   shaderc_compile_options_set_optimization_level(
       options, shaderc_optimization_level_performance);
+  char *macro_name = NULL;
+  char *macro_value;
+  if (kind == shaderc_vertex_shader) {
+    macro_name = "VS";
+    macro_value = "void vertex(); void main(){vertex();}";
+  } else if (kind == shaderc_fragment_shader) {
+    macro_name = "FS";
+    macro_value = "void fragment(); void main(){fragment();}";
+  }
+
+  if (macro_name) {
+    shaderc_compile_options_add_macro_definition(
+        options, macro_name, strlen(macro_name), macro_value,
+        strlen(macro_value));
+  }
+
   shaderc_compilation_result_t result = shaderc_compile_into_spv(
       compiler, src, src_size, kind, file_name, entry_point, options);
 
@@ -194,9 +243,9 @@ SDL_AppResult APP_VulkanShaderModuleCreate(const char *file_name,
     SDL_Log(APP_ERROR "Shader compilation Error: %s",
             shaderc_result_get_error_message(result));
     return SDL_APP_FAILURE;
-  }    
-  SDL_Log(APP_OK"Shader compiled");
-  SDL_Log(APP_WAIT"Creating shader module");
+  }
+  SDL_Log(APP_OK "Shader compiled");
+  SDL_Log(APP_WAIT "Creating shader module");
 
   const size_t shader_size = shaderc_result_get_length(result);
 
@@ -204,62 +253,242 @@ SDL_AppResult APP_VulkanShaderModuleCreate(const char *file_name,
   module_create_info.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
   module_create_info.codeSize = shader_size;
   module_create_info.pCode = (uint32_t *)shaderc_result_get_bytes(result);
-  
-  VkResultCheck(vkCreateShaderModule(Renderer.vulkan.device, &module_create_info, NULL, shader_module));
 
-  SDL_Log(APP_OK"Shader module created");
+  VkResultCheck(vkCreateShaderModule(Renderer.vulkan.device,
+                                     &module_create_info, NULL, shader_module));
+
+  SDL_Log(APP_OK "Shader module created");
   SDL_free(src);
   return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult APP_VulkanShadersCreate() {
-  if (APP_VulkanShaderModuleCreate("shader.vs", shaderc_vertex_shader, "main",
-                             &Renderer.vulkan.shader.vertex) == SDL_APP_FAILURE) {
+  if (APP_VulkanShaderModuleCreate("shader.glsl", shaderc_vertex_shader, "main",
+                                   &Renderer.vulkan.pipeline.shader.vertex) ==
+      SDL_APP_FAILURE) {
     return SDL_APP_FAILURE;
   }
-  
-  if (APP_VulkanShaderModuleCreate("shader.fs", shaderc_fragment_shader, "main",
-                             &Renderer.vulkan.shader.fragment) == SDL_APP_FAILURE) {
+
+  if (APP_VulkanShaderModuleCreate("shader.glsl", shaderc_fragment_shader,
+                                   "main", &Renderer.vulkan.pipeline.shader.fragment) ==
+      SDL_APP_FAILURE) {
     return SDL_APP_FAILURE;
   }
-  
+
   return SDL_APP_CONTINUE;
 }
 
 void APP_VulkanShadersDestroy() {
-  SDL_Log(APP_WAIT"Destroying shaders");
-  vkDestroyShaderModule(Renderer.vulkan.device, Renderer.vulkan.shader.vertex,
+  SDL_Log(APP_WAIT "Destroying shaders");
+  vkDestroyShaderModule(Renderer.vulkan.device, Renderer.vulkan.pipeline.shader.vertex,
                         NULL);
-  vkDestroyShaderModule(Renderer.vulkan.device, Renderer.vulkan.shader.fragment,
+  vkDestroyShaderModule(Renderer.vulkan.device, Renderer.vulkan.pipeline.shader.fragment,
                         NULL);
-  SDL_Log(APP_OK"Shaders destroyed");  
+  SDL_Log(APP_OK "Shaders destroyed");
+}
+
+SDL_AppResult APP_VulkanFindMemoryType(uint32_t type_filter,
+				       VkMemoryPropertyFlags properties, uint32_t *memory_type) {
+  VkPhysicalDeviceMemoryProperties available_properties;
+  vkGetPhysicalDeviceMemoryProperties(Renderer.vulkan.physicalDevice,
+                                      &available_properties);
+  for (uint32_t i = 0; i < available_properties.memoryTypeCount; i++) {
+    // if this type is available and has the same properties that we need
+    if ((type_filter & (1 << i) &&
+         (available_properties.memoryTypes[i].propertyFlags & properties) ==
+             properties)) {
+      *memory_type = i;
+      return SDL_APP_CONTINUE;
+    }
+  }
+  SDL_Log(APP_ERROR "Couldn't find a suitable memory type!");
+  return SDL_APP_FAILURE;
+}
+
+SDL_AppResult APP_VulkanBufferCreate(
+    VkDeviceSize size, VkBufferUsageFlags usage,
+    VkMemoryPropertyFlags properties, VmaMemoryUsage memory_usage,
+    VmaAllocationCreateFlags memory_flags, VkBuffer *out_buffer,
+    VmaAllocation *out_allocation, VmaAllocationInfo *out_alloc_info) {
+
+  VkBufferCreateInfo buffer_info = {0};
+  buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  buffer_info.size = size;
+  buffer_info.usage = usage;
+  buffer_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+  VmaAllocationCreateInfo alloc_info = {0};
+  alloc_info.usage = memory_usage;
+  alloc_info.flags = memory_flags;
+  
+  VkResultCheck(vmaCreateBuffer(Renderer.allocator, &buffer_info, &alloc_info,
+                                out_buffer, out_allocation, out_alloc_info));
+  return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult APP_VulkanUniformBufferObjectUpdate() {
+  SDL_Log(APP_WAIT "Updating uniform buffer object");
+  struct UniformBufferObject *ubo = &Renderer.vulkan.pipeline.uniform.bufferObject;
+  ubo->windowSize[0] = Renderer.window.width;
+  ubo->windowSize[1] = Renderer.window.height;
+  ubo->time = SDL_GetTicks()/1000.0f;
+
+  VmaAllocationInfo *alloc_info = &Renderer.vulkan.pipeline.uniform.buffers.allocationInfo[Renderer.swapchain.imageIndex];
+  SDL_Log("OK?");  
+  void *mapped_data = alloc_info->pMappedData;
+  SDL_Log("OK??");
+  
+  memcpy(mapped_data, ubo,
+         sizeof(Renderer.vulkan.pipeline.uniform.bufferObject));
+  SDL_Log("OK???");
+  SDL_Log(APP_OK "Uniform buffer object updated");  
+  return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult APP_VulkanUniformBuffersCreate(struct Uniform *uniform) {
+  SDL_Log(APP_WAIT"Creating uniform buffers");
+  VkDeviceSize buffer_size = sizeof(uniform->bufferObject);
+  uniform->buffers.vkBuffers =
+      malloc(sizeof(*uniform->buffers.vkBuffers) * APP_MAX_FRAMES_IN_FLIGHT);
+  uniform->buffers.allocation =
+      malloc(sizeof(*uniform->buffers.allocation) * APP_MAX_FRAMES_IN_FLIGHT);
+  uniform->buffers.allocationInfo = malloc(
+      sizeof(*uniform->buffers.allocationInfo) * APP_MAX_FRAMES_IN_FLIGHT);
+
+  for (size_t i = 0; i < APP_MAX_FRAMES_IN_FLIGHT; i++) {
+
+    APP_VulkanBufferCreate(
+        buffer_size, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+	VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+        VMA_MEMORY_USAGE_CPU_TO_GPU, // needed for uniforms 
+        VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+	VMA_ALLOCATION_CREATE_MAPPED_BIT, // needed for persistent mapping
+        &uniform->buffers.vkBuffers[i], &uniform->buffers.allocation[i],
+        &uniform->buffers.allocationInfo[i]);
+  }
+  
+  SDL_Log(APP_OK"Uniform buffers created");
+  return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult APP_VulkanDescriptorSetLayoutCreate() {
+  // Creating descriptor set layout binding
+  SDL_Log(APP_WAIT "Creating descriptor set layout");
+
+  VkDescriptorSetLayoutBinding ubo_layout_binding = {0};
+  ubo_layout_binding.binding = 0;
+  ubo_layout_binding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  ubo_layout_binding.descriptorCount = 1;
+  ubo_layout_binding.stageFlags = VK_SHADER_STAGE_ALL_GRAPHICS;
+
+  // Connecting it to a descriptor set layout
+  VkDescriptorSetLayoutCreateInfo descriptor_layout_info = {0};
+  descriptor_layout_info.sType =
+      VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+  descriptor_layout_info.bindingCount = 1;
+  descriptor_layout_info.pBindings = &ubo_layout_binding;
+
+  VkResultCheck(vkCreateDescriptorSetLayout(
+      Renderer.vulkan.device, &descriptor_layout_info, NULL,
+      &Renderer.vulkan.pipeline.uniform.descriptorLayout));
+  SDL_Log(APP_OK"Descriptor set layout created");
+  
+  return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult APP_VulkanDescriptorPoolCreate() {
+  SDL_Log(APP_WAIT"Creating descriptor set pools");
+  VkDescriptorPoolSize pool_size = {0};
+  pool_size.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+  pool_size.descriptorCount = APP_MAX_FRAMES_IN_FLIGHT;
+
+  VkDescriptorPoolCreateInfo pool_info = {0};
+  pool_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+  pool_info.pPoolSizes = &pool_size;
+  pool_info.poolSizeCount = 1;
+  pool_info.maxSets = APP_MAX_FRAMES_IN_FLIGHT;
+
+  VkResultCheck(
+      vkCreateDescriptorPool(Renderer.vulkan.device, &pool_info, NULL,
+                             &Renderer.vulkan.pipeline.uniform.descriptorPool));
+  SDL_Log(APP_OK"Descriptor set pool created");
+  return SDL_APP_CONTINUE;
 }
 
 
-SDL_AppResult APP_VulkanPipelineCreate(VkPipeline *pipeline) {
-  VkPipelineLayoutCreateInfo layout_info = {0};
-  layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-  layout_info.setLayoutCount = 0;
-  layout_info.pushConstantRangeCount = 0;
+SDL_AppResult APP_VulkanDescriptorSetsCreate() {
+  SDL_Log(APP_WAIT"Creating descriptor sets");
+  VkDescriptorSetLayout descriptor_set_layouts[APP_MAX_FRAMES_IN_FLIGHT];
+  for (uint32_t i = 0; i < APP_MAX_FRAMES_IN_FLIGHT; i++) {
+    descriptor_set_layouts[i] = Renderer.vulkan.pipeline.uniform.descriptorLayout;
+  }
+  VkDescriptorSetAllocateInfo alloc_info = {0};
+  alloc_info.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+  alloc_info.descriptorPool = Renderer.vulkan.pipeline.uniform.descriptorPool;
+  alloc_info.descriptorSetCount = ARRLEN(descriptor_set_layouts);
+  alloc_info.pSetLayouts = descriptor_set_layouts;
+
+  // allocate enough size
+  VkResultCheck(vkAllocateDescriptorSets(
+      Renderer.vulkan.device, &alloc_info,
+      Renderer.vulkan.pipeline.uniform.descriptorSets));
+  SDL_Log(APP_OK"Descriptor sets created");
+
+  SDL_Log(APP_WAIT"Updating descriptor sets");
+  for (uint32_t i = 0; i < ARRLEN(Renderer.vulkan.pipeline.uniform.descriptorSets); i++) {
+    VkDescriptorBufferInfo buffer_info = {0};
+    buffer_info.buffer = Renderer.vulkan.pipeline.uniform.buffers.vkBuffers[i];
+    buffer_info.offset = 0;
+    buffer_info.range = sizeof(Renderer.vulkan.pipeline.uniform.bufferObject);
+
+
+    VkWriteDescriptorSet desc_write = {0};
+    desc_write.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    desc_write.dstSet = Renderer.vulkan.pipeline.uniform.descriptorSets[i];
+    desc_write.dstBinding = 0;
+    desc_write.dstArrayElement = 0;
+    desc_write.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    desc_write.descriptorCount = 1;
+    desc_write.pBufferInfo = &buffer_info;
+    desc_write.pImageInfo = NULL;
+    desc_write.pTexelBufferView = NULL;
+
+    vkUpdateDescriptorSets(Renderer.vulkan.device, 1, &desc_write, 0, NULL);
+  }
+  SDL_Log(APP_OK"Descriptor sets updated");
+  
+  return SDL_APP_CONTINUE;
+}  
+
+SDL_AppResult APP_VulkanPipelineCreate(struct Pipeline *pipeline) {
+  // Creating pipeline
+  VkPipelineLayoutCreateInfo pipeline_layout_info = {0};
+  pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  pipeline_layout_info.setLayoutCount = 1;
+  pipeline_layout_info.pushConstantRangeCount = 0;
+  pipeline_layout_info.pSetLayouts = &Renderer.vulkan.pipeline.uniform.descriptorLayout;
 
   SDL_Log(APP_WAIT "Creating pipeline layout");
-  VkResultCheck(vkCreatePipelineLayout(Renderer.vulkan.device, &layout_info,
-                                       NULL, &Renderer.vulkan.pipelineLayout));
+  VkResultCheck(vkCreatePipelineLayout(Renderer.vulkan.device,
+                                       &pipeline_layout_info, NULL,
+                                       &pipeline->layout));
   SDL_Log(APP_OK "Pipeline layout created");
   SDL_Log(APP_WAIT "Creating pipeline");
 
-  const char *entrypoint = "main";
+  const char *entrypoint_vertex = "main";
+  const char *entrypoint_fragment = "main";
   VkPipelineShaderStageCreateInfo shader_stages[] = {
       (VkPipelineShaderStageCreateInfo){
           .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
           .stage = VK_SHADER_STAGE_VERTEX_BIT,
-          .module = Renderer.vulkan.shader.vertex,
-          .pName = entrypoint},
+          .module = Renderer.vulkan.pipeline.shader.vertex,
+          .pName = entrypoint_vertex},
       (VkPipelineShaderStageCreateInfo){
           .sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO,
           .stage = VK_SHADER_STAGE_FRAGMENT_BIT,
-          .module = Renderer.vulkan.shader.fragment,
-          .pName = entrypoint}};
+          .module = Renderer.vulkan.pipeline.shader.fragment,
+          .pName = entrypoint_fragment}};
 
   // Primitive topology triangles
   VkPipelineVertexInputStateCreateInfo vert_input_info = {0};
@@ -315,7 +544,6 @@ SDL_AppResult APP_VulkanPipelineCreate(VkPipeline *pipeline) {
   blend_info.attachmentCount = 1;
   blend_info.pAttachments = &attachment_state;
 
-
   // Enable dynamic state
   VkDynamicState dynamic_state[] = {
       VK_DYNAMIC_STATE_VIEWPORT,
@@ -326,7 +554,6 @@ SDL_AppResult APP_VulkanPipelineCreate(VkPipeline *pipeline) {
       VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
   dynamic_state_info.dynamicStateCount = ARRLEN(dynamic_state);
   dynamic_state_info.pDynamicStates = dynamic_state;
-
 
   // Dynamic rendering
   VkPipelineRenderingCreateInfo render_info = {0};
@@ -341,28 +568,38 @@ SDL_AppResult APP_VulkanPipelineCreate(VkPipeline *pipeline) {
   pipeline_info.pNext = &render_info; // for dynamic rendering
   pipeline_info.stageCount = ARRLEN(shader_stages);
   pipeline_info.pStages = shader_stages; // Shader stages with VkShader's
-  pipeline_info.pVertexInputState = &vert_input_info; // blank vertex input state
-  pipeline_info.pInputAssemblyState = &input_assembly_info; // triangle list topology
-  pipeline_info.pViewportState = &viewport_info; // single viewport and scissor test, but dynamicaly
-  pipeline_info.pRasterizationState = &raster_info; // culling backfaces, front direction CCW
+  pipeline_info.pVertexInputState =
+      &vert_input_info; // blank vertex input state
+  pipeline_info.pInputAssemblyState =
+      &input_assembly_info; // triangle list topology
+  pipeline_info.pViewportState =
+      &viewport_info; // single viewport and scissor test, but dynamicaly
+  pipeline_info.pRasterizationState =
+      &raster_info; // culling backfaces, front direction CCW
   pipeline_info.pMultisampleState = &multisampling_info; // no multisampling
-  pipeline_info.pDepthStencilState = &depth_stencil_info; // depth testing and writing on
+  pipeline_info.pDepthStencilState =
+      &depth_stencil_info;                      // depth testing and writing on
   pipeline_info.pColorBlendState = &blend_info; // one color attachment
-  pipeline_info.pDynamicState = &dynamic_state_info; // viewport and scissor states are dynamic
-  pipeline_info.layout = Renderer.vulkan.pipelineLayout; // pipeline doesn't expect any descriptors
-  pipeline_info.renderPass = VK_NULL_HANDLE; // not using render passes, dynamic rendering
+  pipeline_info.pDynamicState =
+      &dynamic_state_info; // viewport and scissor states are dynamic
+  pipeline_info.layout =
+      pipeline->layout; // pipeline doesn't expect any descriptors
+  pipeline_info.renderPass =
+      VK_NULL_HANDLE; // not using render passes, dynamic rendering
 
-  *pipeline = (VkPipeline){0};
+  pipeline->vkPipeline = (VkPipeline){0};
   VkResultCheck(vkCreateGraphicsPipelines(Renderer.vulkan.device, NULL, 1,
-                                          &pipeline_info, NULL, pipeline));
+                                          &pipeline_info, NULL, &pipeline->vkPipeline));
 
-  SDL_Log(APP_OK "Pipeline created");  
+  SDL_Log(APP_OK "Pipeline created");
   return SDL_APP_CONTINUE;
 }
 
-void APP_VulkanPipelineDestroy(VkPipeline *pipeline) {
-  vkDestroyPipeline(Renderer.vulkan.device, *pipeline, NULL);
-  vkDestroyPipelineLayout(Renderer.vulkan.device, Renderer.vulkan.pipelineLayout, NULL);
+void APP_VulkanPipelineDestroy(struct Pipeline *pipeline) {
+  vkDestroyPipeline(Renderer.vulkan.device, pipeline->vkPipeline, NULL);
+  vkDestroyPipelineLayout(Renderer.vulkan.device,
+                          Renderer.vulkan.pipeline.layout, NULL);
+  vkDestroyDescriptorSetLayout(Renderer.vulkan.device, Renderer.vulkan.pipeline.uniform.descriptorLayout, NULL);
 }
 
 SDL_AppResult APP_VulkanSyncResourcesCreate() {
@@ -377,13 +614,12 @@ SDL_AppResult APP_VulkanSyncResourcesCreate() {
   semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
   semaphore_info.pNext = &semaphore_type_info;
 
-  SDL_Log(APP_WAIT"Creating timeline semaphore");
+  SDL_Log(APP_WAIT "Creating timeline semaphore");
   VkResultCheck(vkCreateSemaphore(Renderer.vulkan.device, &semaphore_info, NULL,
-                                  &Renderer.vulkan.timelineSemapthore));
-  SDL_Log(APP_OK"Timeline semaphore created");
+                                  &Renderer.vulkan.timelineSemaphore));
+  SDL_Log(APP_OK "Timeline semaphore created");
 
-
-  SDL_Log(APP_WAIT"Creating frame semaphores");
+  SDL_Log(APP_WAIT "Creating frame semaphores");
   for (uint32_t i = 0; i < APP_MAX_FRAMES_IN_FLIGHT; i++) {
     VkSemaphoreCreateInfo semaphore_info = {0};
     semaphore_info.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -391,27 +627,27 @@ SDL_AppResult APP_VulkanSyncResourcesCreate() {
         Renderer.vulkan.device, &semaphore_info, NULL,
         &Renderer.vulkan.framesInFlight[i].imageAcquiredSemaphore));
   }
-  SDL_Log(APP_OK"Frame semaphores created");
-  
+  SDL_Log(APP_OK "Frame semaphores created");
+
   return SDL_APP_CONTINUE;
 }
 
 void APP_VulkanSyncResourcesDestroy() {
-  SDL_Log(APP_WAIT"Destroying frame semaphores");
+  SDL_Log(APP_WAIT "Destroying frame semaphores");
   for (uint32_t i = 0; i < APP_MAX_FRAMES_IN_FLIGHT; i++) {
     vkDestroySemaphore(Renderer.vulkan.device,
                        Renderer.vulkan.framesInFlight[i].imageAcquiredSemaphore,
                        NULL);
   }
   SDL_Log(APP_OK "Frame semaphores destroyed");
-  SDL_Log(APP_WAIT"Destroying timeline semaphore");  
-  vkDestroySemaphore(Renderer.vulkan.device, Renderer.vulkan.timelineSemapthore, NULL);
-  SDL_Log(APP_OK"Timeline semaphore destroyed");
+  SDL_Log(APP_WAIT "Destroying timeline semaphore");
+  vkDestroySemaphore(Renderer.vulkan.device, Renderer.vulkan.timelineSemaphore,
+                     NULL);
+  SDL_Log(APP_OK "Timeline semaphore destroyed");
 }
 
-
 SDL_AppResult APP_VulkanCommandBuffersCreate() {
-  SDL_Log(APP_WAIT"Creating frames in flight command buffers");
+  SDL_Log(APP_WAIT "Creating frames in flight command buffers");
   for (uint32_t i = 0; i < APP_MAX_FRAMES_IN_FLIGHT; i++) {
     VkCommandPoolCreateInfo pool_info = {0};
     pool_info.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
@@ -419,7 +655,6 @@ SDL_AppResult APP_VulkanCommandBuffersCreate() {
     VkResultCheck(
         vkCreateCommandPool(Renderer.vulkan.device, &pool_info, NULL,
                             &Renderer.vulkan.framesInFlight[i].commandPool));
-    
 
     VkCommandBufferAllocateInfo command_alloc_info = {0};
     command_alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -437,11 +672,11 @@ SDL_AppResult APP_VulkanCommandBuffersCreate() {
   return SDL_APP_CONTINUE;
 }
 
-
 void APP_VulkanCommandBuffersDestroy() {
   for (uint32_t i = 0; i < APP_MAX_FRAMES_IN_FLIGHT; i++) {
-    vkDestroyCommandPool(Renderer.vulkan.device, Renderer.vulkan.framesInFlight[i].commandPool, NULL);
-  }    
+    vkDestroyCommandPool(Renderer.vulkan.device,
+                         Renderer.vulkan.framesInFlight[i].commandPool, NULL);
+  }
 }
 
 SDL_AppResult APP_RendererInit() {
@@ -455,11 +690,11 @@ SDL_AppResult APP_RendererInit() {
 
 SDL_AppResult APP_SDLInit() {
   SDL_ResultCheck(SDL_Init(SDL_INIT_VIDEO));
-  
-  Renderer.window.sdl_window =
-      SDL_CreateWindow("Vulkan + SDL3", Renderer.window.width,
-                       Renderer.window.height, SDL_WINDOW_VULKAN);
-  SDL_ResultCheck(Renderer.window.sdl_window);
+
+  Renderer.window.sdlWindow = SDL_CreateWindow(
+      "Vulkan + SDL3", Renderer.window.width, Renderer.window.height,
+      SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
+  SDL_ResultCheck(Renderer.window.sdlWindow);
   return SDL_APP_CONTINUE;
 }
 
@@ -534,18 +769,17 @@ SDL_AppResult APP_VulkanInstanceCreate() {
   instance_info.enabledLayerCount = ARRLEN(InstanceRequestedLayers);
   instance_info.ppEnabledLayerNames = InstanceRequestedLayers;
 
-
   VkResultCheck(
       vkCreateInstance(&instance_info, NULL, &Renderer.vulkan.instance));
   volkLoadInstance(Renderer.vulkan.instance);
   SDL_Log(APP_OK "Vulkan instance loaded");
-  
+
   return SDL_APP_CONTINUE;
 }
 
 SDL_AppResult APP_VulkanSurfaceCreate() {
   SDL_Log(APP_WAIT "Creating vulkan surface");
-  SDL_ResultCheck(SDL_Vulkan_CreateSurface(Renderer.window.sdl_window,
+  SDL_ResultCheck(SDL_Vulkan_CreateSurface(Renderer.window.sdlWindow,
                                            Renderer.vulkan.instance, NULL,
                                            &Renderer.vulkan.surface));
   SDL_Log(APP_OK "Vulkan surface created");
@@ -678,7 +912,8 @@ SDL_AppResult APP_VulkanDeviceCreate() {
   SDL_Log(APP_WAIT "Checking for available physical device features");
   if (!supported_features_13.dynamicRendering ||
       !supported_features_13.synchronization2 ||
-      !supported_features_12.timelineSemaphore) {
+      !supported_features_12.timelineSemaphore ||
+      !supported_features_12.bufferDeviceAddress) {
     SDL_Log(APP_ERROR "Physical device doesn't meet the feature requirements");
     return SDL_APP_FAILURE;
   }
@@ -695,6 +930,7 @@ SDL_AppResult APP_VulkanDeviceCreate() {
 
   VkPhysicalDeviceVulkan12Features requested_features_12 = {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
+      .bufferDeviceAddress = VK_TRUE,
       .pNext =
           &requested_features_13, // streamlined multi-frame-in-flight handling
       .timelineSemaphore = VK_TRUE};
@@ -754,16 +990,13 @@ SDL_AppResult APP_VulkanVMACreate() {
   return SDL_APP_CONTINUE;
 }
 
-void APP_VulkanVolkUnbind() {
-  volkFinalize();
-}  
+void APP_VulkanVolkUnbind() { volkFinalize(); }
 
 void APP_VulkanInstanceDestroy() {
   if (Renderer.vulkan.instance) {
     vkDestroyInstance(Renderer.vulkan.instance, NULL);
   }
 }
-  
 
 void APP_VulkanSurfaceDestroy() {
   if (Renderer.vulkan.surface) {
@@ -776,11 +1009,10 @@ void APP_VulkanDeviceDestroy() {
   if (Renderer.vulkan.device) {
     vkDestroyDevice(Renderer.vulkan.device, NULL);
   }
-}  
+}
 
 void APP_VulkanVMADestroy() {
   if (Renderer.allocator) {
     vmaDestroyAllocator(Renderer.allocator);
   }
 }
-  
