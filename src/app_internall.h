@@ -1,3 +1,4 @@
+#include <vmath.h>
 #define SDL_MAIN_USE_CALLBACKS 1
 #define VK_NO_PROTOTYPES
 #include <SDL3/SDL.h>
@@ -18,6 +19,7 @@
 #define APP_SHADER_PATH "src/shaders/"
 #define APP_MAX_FRAMES_IN_FLIGHT 3
 #define APP_VSYNC_MODE 1
+#define APP_MOUSE_HIDE 1
 
 
 struct Window {
@@ -65,14 +67,18 @@ struct FrameResources {
 };
 
 struct UniformBufferObject {
+  float model[16];
+  float view[16];
+  float projection[16];  
   float screenSize[2];
   float time;
-  float player_position[3];
-  float player_rotation[3];
-  float sphere_position[3];
-  float sphere_radius;
-  float light_direction[3];
-  float ambient_color[3];
+};
+
+
+struct Model {
+  char name[50];
+  u32 vertex_offset;
+  u32 vertex_count;
 };
 
 struct Buffers {
@@ -89,11 +95,32 @@ struct Uniform {
   VkDescriptorSet descriptorSets[APP_MAX_FRAMES_IN_FLIGHT];  
 };
 
+struct Vertex {
+  float position[3];
+  float normal[3];
+  float uv[2];
+};  
+
+struct Vertices {
+  struct Vertex *vertices;
+  uint32_t count;
+};
+
+struct VertexBuffer {
+  VkBuffer vkBuffer;
+  struct Vertices vertices;
+  VmaAllocation allocation;
+  VkDeviceAddress address;
+  VmaAllocationInfo allocationInfo;
+};  
+
 struct Pipeline {
   VkPipelineLayout layout;
   VkPipeline vkPipeline;
   struct Uniform uniform;
   struct Shader shader;
+  struct VertexBuffer vertexBuffer;
+  struct Model *models;
 };
 
 struct Vulkan {
@@ -183,6 +210,7 @@ void APP_VulkanSwapchainDestroy();
 SDL_AppResult APP_VulkanShadersCreate();
 void APP_VulkanShadersDestroy();
 SDL_AppResult APP_VulkanUniformBuffersCreate(struct Uniform *uniform);
+SDL_AppResult APP_VulkanVerticesInitialize();
 SDL_AppResult APP_VulkanDescriptorSetLayoutCreate();
 SDL_AppResult APP_VulkanDescriptorPoolCreate();
 SDL_AppResult APP_VulkanDescriptorSetsCreate();

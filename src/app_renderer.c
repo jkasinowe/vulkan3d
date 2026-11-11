@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <stdlib.h>
 #include <vulkan/vulkan_core.h>
+#include <math.h>
+#define PI 3.1415926535
 
 struct Renderer Renderer;
 
@@ -336,22 +338,21 @@ SDL_AppResult APP_VulkanUniformBufferObjectUpdate() {
   ubo->screenSize[0] = Renderer.window.width;
   ubo->screenSize[1] = Renderer.window.height;
   ubo->time = SDL_GetTicks() / 1000.0f;
+  float aspect_ratio = Renderer.window.width/(float)Renderer.window.height;
 
-  memcpy(ubo->player_position, Player.position, sizeof(float) * 3);
-  memcpy(ubo->player_rotation, Player.rotation, sizeof(float) * 3);    
-  memcpy(ubo->sphere_position, Sphere.position, sizeof(float) * 3);
-  memcpy(ubo->light_direction, Light.direction, sizeof(float) * 3);
-  memcpy(ubo->ambient_color, Light.ambientColor, sizeof(float) * 3);
+  // matricies
+  VM44_Copy(ubo->model, (float[])VM44_IDENTITY);
+  VM44_V3A3(Player.position, Player.rotation, ubo->view);
+  VM44_Inverse(ubo->view);
+  VM44_ProjectionPerspective(ubo->projection, PI / 4, aspect_ratio, 0.1, 100.0);
 
-  
-  
-  ubo->sphere_radius = Sphere.radius;
-  
-  VmaAllocationInfo *alloc_info = &Renderer.vulkan.pipeline.uniform.buffers.allocationInfo[Renderer.swapchain.imageIndex];
+  VmaAllocationInfo *alloc_info =
+      &Renderer.vulkan.pipeline.uniform.buffers
+           .allocationInfo[Renderer.swapchain.imageIndex];
   void *mapped_data = alloc_info->pMappedData;
   memcpy(mapped_data, ubo,
          sizeof(Renderer.vulkan.pipeline.uniform.bufferObject));
-  SDL_Log(APP_OK "Uniform buffer object updated");  
+  SDL_Log(APP_OK "Uniform buffer object updated");
   return SDL_APP_CONTINUE;
 }
 
@@ -473,17 +474,55 @@ SDL_AppResult APP_VulkanDescriptorSetsCreate() {
 
 SDL_AppResult APP_VulkanPipelineCreate(struct Pipeline *pipeline) {
   // Creating pipeline
+  VkPushConstantRange constants_range = {0};
+  constants_range.size = sizeof(VkDeviceAddress);
+  constants_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+  
   VkPipelineLayoutCreateInfo pipeline_layout_info = {0};
   pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
   pipeline_layout_info.setLayoutCount = 1;
-  pipeline_layout_info.pushConstantRangeCount = 0;
+  pipeline_layout_info.pushConstantRangeCount = 1;
+  pipeline_layout_info.pPushConstantRanges = &constants_range;
   pipeline_layout_info.pSetLayouts = &Renderer.vulkan.pipeline.uniform.descriptorLayout;
 
   SDL_Log(APP_WAIT "Creating pipeline layout");
-  VkResultCheck(vkCreatePipelineLayout(Renderer.vulkan.device,
-                                       &pipeline_layout_info, NULL,
-                                       &pipeline->layout));
+  VkResultCheck(vkCreatePipelineLayout(
+      Renderer.vulkan.device, &pipeline_layout_info, NULL, &pipeline->layout));
   SDL_Log(APP_OK "Pipeline layout created");
+  
+  SDL_Log(APP_WAIT "Creating vertex BDA");          
+  // create Vertex Buffer via BDA
+  VkBufferCreateInfo buffer_info = {0};
+  buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  buffer_info.size = Renderer.vulkan.pipeline.vertexBuffer.vertices.count * sizeof(struct Vertex);
+  buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+  
+  VmaAllocationCreateInfo alloc_info = {0};
+  alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+  alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+  VkResultCheck(
+      vmaCreateBuffer(Renderer.allocator, &buffer_info, &alloc_info,
+                      &Renderer.vulkan.pipeline.vertexBuffer.vkBuffer,
+                      &Renderer.vulkan.pipeline.vertexBuffer.allocation,
+                      &Renderer.vulkan.pipeline.vertexBuffer.allocationInfo));
+  
+
+  VkBufferDeviceAddressInfo bda_info = {0};
+  bda_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+  bda_info.buffer = Renderer.vulkan.pipeline.vertexBuffer.vkBuffer;
+  Renderer.vulkan.pipeline.vertexBuffer.address =
+      vkGetBufferDeviceAddress(Renderer.vulkan.device, &bda_info);
+  if (!Renderer.vulkan.pipeline.vertexBuffer.address) {
+    SDL_Log(APP_ERROR "NULL BDA");
+    return SDL_APP_FAILURE;
+  };    
+
+  SDL_Log(APP_WAIT "BDA created");
+  
   SDL_Log(APP_WAIT "Creating pipeline");
 
   const char *entrypoint_vertex = "main";
@@ -532,7 +571,8 @@ SDL_AppResult APP_VulkanPipelineCreate(struct Pipeline *pipeline) {
   raster_info.sType =
       VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
   raster_info.polygonMode = VK_POLYGON_MODE_FILL;
-  raster_info.cullMode = VK_CULL_MODE_BACK_BIT;
+  //raster_info.cullMode = VK_CULL_MODE_BACK_BIT;
+  raster_info.cullMode = VK_CULL_MODE_NONE;
   raster_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
   raster_info.lineWidth = 1.0f;
 
@@ -596,6 +636,7 @@ SDL_AppResult APP_VulkanPipelineCreate(struct Pipeline *pipeline) {
       pipeline->layout; // pipeline doesn't expect any descriptors
   pipeline_info.renderPass =
       VK_NULL_HANDLE; // not using render passes, dynamic rendering
+
 
   pipeline->vkPipeline = (VkPipeline){0};
   VkResultCheck(vkCreateGraphicsPipelines(Renderer.vulkan.device, NULL, 1,
@@ -705,6 +746,10 @@ SDL_AppResult APP_SDLInit() {
       "Vulkan + SDL3", Renderer.window.width, Renderer.window.height,
       SDL_WINDOW_VULKAN | SDL_WINDOW_RESIZABLE);
   SDL_ResultCheck(Renderer.window.sdlWindow);
+  if (APP_MOUSE_HIDE) {
+    SDL_SetWindowRelativeMouseMode(Renderer.window.sdlWindow, true);
+  }    
+  
   return SDL_APP_CONTINUE;
 }
 
@@ -943,7 +988,6 @@ SDL_AppResult APP_VulkanDeviceCreate() {
       .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
       .bufferDeviceAddress = VK_TRUE,
       .scalarBlockLayout = VK_TRUE,
-
       .pNext =
           &requested_features_13, // streamlined multi-frame-in-flight handling
       .timelineSemaphore = VK_TRUE};
@@ -1028,4 +1072,31 @@ void APP_VulkanVMADestroy() {
   if (Renderer.allocator) {
     vmaDestroyAllocator(Renderer.allocator);
   }
+}
+
+SDL_AppResult APP_VulkanVerticesInitialize() {
+  uint32_t sides = 100;
+  
+  
+  struct Vertex vertices[sides * 3];
+  memset(vertices, 0, sizeof(vertices));
+  for (uint32_t i = 0; i < sides; i++) {
+    vertices[3 * i + 0].position[0] = 0.5 * cos(2 * PI * (i + 0) / sides);
+    vertices[3 * i + 0].position[1] = 0.5 * sin(2 * PI * (i + 0) / sides);
+    vertices[3 * i + 0].position[2] = 0;
+    vertices[3 * i + 1].position[0] = 0.5 * cos(2 * PI * (i + 1) / sides);
+    vertices[3 * i + 1].position[1] = 0.5 * sin(2 * PI * (i + 1) / sides);
+    vertices[3 * i + 1].position[2] = 0;
+    vertices[3 * i + 2].position[0] = 0;
+    vertices[3 * i + 2].position[1] = 0;
+    vertices[3 * i + 2].position[2] = 0;    
+  }
+
+  
+  
+  Renderer.vulkan.pipeline.vertexBuffer.vertices.vertices = malloc(sizeof(vertices));
+  Renderer.vulkan.pipeline.vertexBuffer.vertices.count = ARRLEN(vertices);
+  memcpy(Renderer.vulkan.pipeline.vertexBuffer.vertices.vertices, vertices,
+         sizeof(vertices));
+  return SDL_APP_CONTINUE;
 }

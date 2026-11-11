@@ -12,11 +12,7 @@ double delta_time = 0;
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   time_last = SDL_GetPerformanceCounter();
-  Player.position[2] = 0;
-  Sphere.position[2] = -2;
-  Sphere.radius = 0.5;
-  Light.direction[1] = 1;
-  Light.ambientColor[0] = 0.02;
+  Player.position[2] = -2;
   if (APP_GraphicsInit() != SDL_APP_CONTINUE) {
     return SDL_APP_FAILURE;
   }
@@ -322,9 +318,20 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                             &Renderer.vulkan.pipeline.uniform
                                  .descriptorSets[Renderer.vulkan.frameIndex],
                             0, NULL);
+
+    memcpy(Renderer.vulkan.pipeline.vertexBuffer.allocationInfo.pMappedData,
+           Renderer.vulkan.pipeline.vertexBuffer.vertices.vertices,
+           sizeof(struct Vertex) *
+               Renderer.vulkan.pipeline.vertexBuffer.vertices.count);
     
-    vkCmdDraw(Renderer.vulkan.frameCurrent->commandBuffer, 3, 1, 0, 0);
-    vkCmdDraw(Renderer.vulkan.frameCurrent->commandBuffer, 3, 1, 3, 0);
+    
+    vkCmdPushConstants(Renderer.vulkan.frameCurrent->commandBuffer,
+                     Renderer.vulkan.pipeline.layout,
+		       VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(VkDeviceAddress),
+                     &Renderer.vulkan.pipeline.vertexBuffer.address);
+
+    vkCmdDraw(Renderer.vulkan.frameCurrent->commandBuffer,
+              Renderer.vulkan.pipeline.vertexBuffer.vertices.count, 1, 0, 0);
   }
 
   // End dynamic rendering

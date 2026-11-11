@@ -71,6 +71,10 @@ SDL_AppResult APP_GraphicsInit() {
     return SDL_APP_FAILURE;
   }
 
+  if (APP_VulkanVerticesInitialize()) {    
+    return SDL_APP_FAILURE;
+  }    
+  
   // Creating descriptor set layout
   //------------------------------------------------------------------------------------------------------
   if (APP_VulkanDescriptorSetLayoutCreate()) {    

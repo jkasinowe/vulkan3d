@@ -11,8 +11,16 @@ set(CMAKE_C_STANDARD 99)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+include(FetchContent)
 
-# Vulkan App
+FetchContent_Declare(
+  vmath
+  GIT_REPOSITORY https://github.com/kazhnov/vmath.git
+  GIT_TAG        main
+
+  SOURCE_SUBDIR "MADE-UP-DIRECTORY"  
+)
+
 add_executable(vulkan_app
 src/main.c
 src/app_renderer.c
@@ -20,6 +28,7 @@ src/app_graphics.c
 src/app_callbacks.c
 src/vk_mem_alloc.cpp
 src/app_game.c
+src/vmath.c
 )
 
 set_target_properties(vulkan_app PROPERTIES LINKER_LANGUAGE CXX)
@@ -27,6 +36,11 @@ set_target_properties(vulkan_app PROPERTIES LINKER_LANGUAGE CXX)
 find_package(Vulkan REQUIRED COMPONENTS volk)
 find_package(SDL3 REQUIRED)
 
+FetchContent_MakeAvailable(vmath)
+
+target_include_directories(vulkan_app SYSTEM PRIVATE
+  "${FETCHCONTENT_BASE_DIR}/vmath-src/"
+)
 
 target_link_libraries(vulkan_app PRIVATE   Vulkan::volk
 				 SDL3::SDL3  shaderc_combined
