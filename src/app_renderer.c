@@ -33,8 +33,12 @@ SDL_AppResult APP_VulkanSwapchainCreate() {
       Renderer.vulkan.physicalDevice, Renderer.vulkan.surface,
       &present_mode_count, present_modes));
   bool present_mode_needed_found = false;
+
+  VkPresentModeKHR present_mode_needed =
+      APP_VSYNC_MODE ? VK_PRESENT_MODE_FIFO_KHR : VK_PRESENT_MODE_IMMEDIATE_KHR;
+  
   for (uint32_t i = 0; i < present_mode_count; i++) {
-    if (present_modes[i] == VK_PRESENT_MODE_FIFO_KHR) {
+    if (present_modes[i] == present_mode_needed) {
       present_mode_needed_found = true;
       break;
     }
@@ -65,7 +69,7 @@ SDL_AppResult APP_VulkanSwapchainCreate() {
   swapchain_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
   swapchain_info.preTransform = surface_capabilities.currentTransform;
   swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-  swapchain_info.presentMode = VK_PRESENT_MODE_FIFO_KHR;
+  swapchain_info.presentMode = present_mode_needed;
 
   SDL_Log(APP_WAIT "Creating swapchain");
   VkResultCheck(vkCreateSwapchainKHR(Renderer.vulkan.device, &swapchain_info,
@@ -334,9 +338,11 @@ SDL_AppResult APP_VulkanUniformBufferObjectUpdate() {
   ubo->time = SDL_GetTicks() / 1000.0f;
 
   memcpy(ubo->player_position, Player.position, sizeof(float) * 3);
+  memcpy(ubo->player_rotation, Player.rotation, sizeof(float) * 3);    
   memcpy(ubo->sphere_position, Sphere.position, sizeof(float) * 3);
   memcpy(ubo->light_direction, Light.direction, sizeof(float) * 3);
-  memcpy(ubo->ambient_color, Light.ambientColor, sizeof(float) * 3);  
+  memcpy(ubo->ambient_color, Light.ambientColor, sizeof(float) * 3);
+
   
   
   ubo->sphere_radius = Sphere.radius;

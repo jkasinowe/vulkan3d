@@ -17,6 +17,8 @@
 #define APP_DEPTH_FORMAT VK_FORMAT_D32_SFLOAT
 #define APP_SHADER_PATH "src/shaders/"
 #define APP_MAX_FRAMES_IN_FLIGHT 3
+#define APP_VSYNC_MODE 1
+
 
 struct Window {
   SDL_Window *sdlWindow;
@@ -66,6 +68,7 @@ struct UniformBufferObject {
   float screenSize[2];
   float time;
   float player_position[3];
+  float player_rotation[3];
   float sphere_position[3];
   float sphere_radius;
   float light_direction[3];

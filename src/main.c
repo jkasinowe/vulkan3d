@@ -2,6 +2,7 @@
 #include <SDL3/SDL_events.h>
 #include <SDL3/SDL_init.h>
 #include <SDL3/SDL_main.h>
+#include <SDL3/SDL_scancode.h>
 #include <SDL3/SDL_timer.h>
 #include <SDL3/SDL_video.h>
 #include <vulkan/vulkan_core.h>
@@ -11,11 +12,10 @@ double delta_time = 0;
 
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   time_last = SDL_GetPerformanceCounter();
-  Player.position[2] = 3;
-  Sphere.position[2] = 1;
+  Player.position[2] = 0;
+  Sphere.position[2] = -2;
   Sphere.radius = 0.5;
-  Light.direction[1] = -1;
-  Light.direction[0] = -1;
+  Light.direction[1] = 1;
   Light.ambientColor[0] = 0.02;
   if (APP_GraphicsInit() != SDL_APP_CONTINUE) {
     return SDL_APP_FAILURE;
@@ -254,12 +254,13 @@ void APP_RendererPresent() {
 }
 
 SDL_AppResult SDL_AppIterate(void *appstate) {
+
   uint64_t time_now = SDL_GetPerformanceCounter();
   delta_time = (time_now - time_last)/(double)SDL_GetPerformanceFrequency();
   time_last = time_now;
   
   SDL_Log("Frame %d, dt = %lf", Renderer.frameIndex, delta_time);
-
+  APP_GameInputHandle();
   
   // Recreate swapchain if necessary
   if (Renderer.swapchain.requireRecreate) {
@@ -351,18 +352,6 @@ SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
     switch (event->key.scancode) {
     case SDL_SCANCODE_ESCAPE:
       return SDL_APP_SUCCESS;
-    case SDL_SCANCODE_W:
-      Player.position[2] -= delta_time;
-      break;
-    case SDL_SCANCODE_S:
-      Player.position[2] += delta_time;
-      break;
-    case SDL_SCANCODE_A:
-      Player.position[0] -= delta_time;
-      break;
-    case SDL_SCANCODE_D:
-      Player.position[0] += delta_time;
-      break;
     default:
       return SDL_APP_CONTINUE;
     }
