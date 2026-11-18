@@ -1,13 +1,12 @@
 #include "app_internall.h"
-#include <SDL3/SDL_init.h>
-#include <SDL3/SDL_oldnames.h>
-#include <SDL3/SDL_video.h>
+#include "vsys.h"
 #include <shaderc/shaderc.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
+#include <vmesh.h>
 #include <vulkan/vulkan_core.h>
-#include <math.h>
 #define PI 3.1415926535
 
 struct Renderer Renderer;
@@ -340,11 +339,14 @@ SDL_AppResult APP_VulkanUniformBufferObjectUpdate() {
   ubo->time = SDL_GetTicks() / 1000.0f;
   float aspect_ratio = Renderer.window.width/(float)Renderer.window.height;
 
+  VM3_Copy(ubo->light_color, Light.ambientColor);
+  VM3_Copy(ubo->light_position, Player.position);  
+  
   // matricies
   VM44_Copy(ubo->model, (float[])VM44_IDENTITY);
   VM44_V3A3(Player.position, Player.rotation, ubo->view);
   VM44_Inverse(ubo->view);
-  VM44_ProjectionPerspective(ubo->projection, PI / 4, aspect_ratio, 0.1, 100.0);
+  VM44_ProjectionPerspective(ubo->projection, PI / 4, aspect_ratio, 0.1, 1000.0);
 
   VmaAllocationInfo *alloc_info =
       &Renderer.vulkan.pipeline.uniform.buffers
@@ -470,13 +472,74 @@ SDL_AppResult APP_VulkanDescriptorSetsCreate() {
   SDL_Log(APP_OK"Descriptor sets updated");
   
   return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult APP_VulkanBDACreate(u32 size, VkBuffer *buffer,
+                                  VmaAllocation *allocation,
+                                  VmaAllocationInfo *allocation_info,
+                                  VkDeviceAddress *address) {
+  SDL_Log(APP_WAIT "Creating BDA");
+  // create Vertex Buffer via BDA
+  VkBufferCreateInfo buffer_info = {0};
+  buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+  buffer_info.size = size;
+  buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
+                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
+
+  VmaAllocationCreateInfo alloc_info = {0};
+  alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
+  alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
+                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
+
+  VkResultCheck(vmaCreateBuffer(Renderer.allocator, &buffer_info, &alloc_info,
+                                buffer, allocation, allocation_info));
+
+  VkBufferDeviceAddressInfo bda_info = {0};
+  bda_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
+  bda_info.buffer = *buffer;
+  *address = vkGetBufferDeviceAddress(Renderer.vulkan.device, &bda_info);
+  if (!*address) {
+    SDL_Log(APP_ERROR "NULL BDA");
+    return SDL_APP_FAILURE;
+  };
+
+  SDL_Log(APP_OK "BDA created");
+  return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult APP_VulkanBDAsCreate() {
+  struct ModelData* model_data = &Renderer.vulkan.modelData;
+  APP_VulkanBDACreate(
+      sizeof(struct VMESH_Vertex) * model_data->vertexBuffer.vertices.count,
+      &model_data->vertexBuffer.vkBuffer, &model_data->vertexBuffer.allocation,
+      &model_data->vertexBuffer.allocationInfo,
+      &Renderer.vulkan.pipeline.pushConstants.vertexAddress);
+  
+  APP_VulkanBDACreate(
+      sizeof(u32) * model_data->indexBuffer.indices.count,
+      &model_data->indexBuffer.vkBuffer, &model_data->indexBuffer.allocation,
+      &model_data->indexBuffer.allocationInfo,
+      &Renderer.vulkan.pipeline.pushConstants.indexAddress);
+
+
+  APP_VulkanBDACreate(
+      sizeof(struct InstanceData) * model_data->instanceBuffer.instances.count,
+      &model_data->instanceBuffer.vkBuffer, &model_data->instanceBuffer.allocation,
+      &model_data->instanceBuffer.allocationInfo,
+      &Renderer.vulkan.pipeline.pushConstants.instanceAddress);
+  
+  
+  return SDL_APP_CONTINUE;
 }  
+
 
 SDL_AppResult APP_VulkanPipelineCreate(struct Pipeline *pipeline) {
   // Creating pipeline
-  VkPushConstantRange constants_range = {0};
-  constants_range.size = sizeof(VkDeviceAddress);
+  VkPushConstantRange constants_range;
+  constants_range.size = sizeof(struct PushConstantData);
   constants_range.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+  constants_range.offset = 0;
   
   VkPipelineLayoutCreateInfo pipeline_layout_info = {0};
   pipeline_layout_info.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -490,41 +553,7 @@ SDL_AppResult APP_VulkanPipelineCreate(struct Pipeline *pipeline) {
       Renderer.vulkan.device, &pipeline_layout_info, NULL, &pipeline->layout));
   SDL_Log(APP_OK "Pipeline layout created");
   
-  SDL_Log(APP_WAIT "Creating vertex BDA");          
-  // create Vertex Buffer via BDA
-  VkBufferCreateInfo buffer_info = {0};
-  buffer_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-  buffer_info.size = Renderer.vulkan.pipeline.vertexBuffer.vertices.count * sizeof(struct Vertex);
-  buffer_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
-                      VK_BUFFER_USAGE_TRANSFER_DST_BIT |
-                      VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT;
-  
-  VmaAllocationCreateInfo alloc_info = {0};
-  alloc_info.usage = VMA_MEMORY_USAGE_AUTO;
-  alloc_info.flags = VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT |
-                     VMA_ALLOCATION_CREATE_MAPPED_BIT;
-
-  VkResultCheck(
-      vmaCreateBuffer(Renderer.allocator, &buffer_info, &alloc_info,
-                      &Renderer.vulkan.pipeline.vertexBuffer.vkBuffer,
-                      &Renderer.vulkan.pipeline.vertexBuffer.allocation,
-                      &Renderer.vulkan.pipeline.vertexBuffer.allocationInfo));
-  
-
-  VkBufferDeviceAddressInfo bda_info = {0};
-  bda_info.sType = VK_STRUCTURE_TYPE_BUFFER_DEVICE_ADDRESS_INFO;
-  bda_info.buffer = Renderer.vulkan.pipeline.vertexBuffer.vkBuffer;
-  Renderer.vulkan.pipeline.vertexBuffer.address =
-      vkGetBufferDeviceAddress(Renderer.vulkan.device, &bda_info);
-  if (!Renderer.vulkan.pipeline.vertexBuffer.address) {
-    SDL_Log(APP_ERROR "NULL BDA");
-    return SDL_APP_FAILURE;
-  };    
-
-  SDL_Log(APP_WAIT "BDA created");
-  
   SDL_Log(APP_WAIT "Creating pipeline");
-
   const char *entrypoint_vertex = "main";
   const char *entrypoint_fragment = "main";
   VkPipelineShaderStageCreateInfo shader_stages[] = {
@@ -571,8 +600,8 @@ SDL_AppResult APP_VulkanPipelineCreate(struct Pipeline *pipeline) {
   raster_info.sType =
       VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
   raster_info.polygonMode = VK_POLYGON_MODE_FILL;
-  //raster_info.cullMode = VK_CULL_MODE_BACK_BIT;
-  raster_info.cullMode = VK_CULL_MODE_NONE;
+  raster_info.cullMode = VK_CULL_MODE_BACK_BIT;
+  //raster_info.cullMode = VK_CULL_MODE_NONE;
   raster_info.frontFace = VK_FRONT_FACE_COUNTER_CLOCKWISE;
   raster_info.lineWidth = 1.0f;
 
@@ -1074,29 +1103,151 @@ void APP_VulkanVMADestroy() {
   }
 }
 
-SDL_AppResult APP_VulkanVerticesInitialize() {
-  uint32_t sides = 100;
-  
-  
-  struct Vertex vertices[sides * 3];
-  memset(vertices, 0, sizeof(vertices));
-  for (uint32_t i = 0; i < sides; i++) {
-    vertices[3 * i + 0].position[0] = 0.5 * cos(2 * PI * (i + 0) / sides);
-    vertices[3 * i + 0].position[1] = 0.5 * sin(2 * PI * (i + 0) / sides);
-    vertices[3 * i + 0].position[2] = 0;
-    vertices[3 * i + 1].position[0] = 0.5 * cos(2 * PI * (i + 1) / sides);
-    vertices[3 * i + 1].position[1] = 0.5 * sin(2 * PI * (i + 1) / sides);
-    vertices[3 * i + 1].position[2] = 0;
-    vertices[3 * i + 2].position[0] = 0;
-    vertices[3 * i + 2].position[1] = 0;
-    vertices[3 * i + 2].position[2] = 0;    
+struct ModelDescription {
+  char *path;
+  char *name;
+};
+
+typedef struct VMESH_Vertex Vertex;
+typedef struct VMESH_Mesh Mesh;
+
+SDL_AppResult APP_VulkanModelLoad(struct ModelDescription *descriptions,
+                                  uint32_t count) {
+  // load all meshes
+  Mesh meshes[count];
+  memset(meshes, 0, sizeof(meshes));
+  u32 vertex_count_total = 0;
+  u32 index_count_total = 0;
+  for (u32 i = 0; i < count; i++) {
+    SDL_Log(APP_WAIT "Preparing mesh data for \"%s\"", descriptions[i].name);
+    char *source = NULL;
+    size_t source_size = 0;
+    VMESH_FileLoad(descriptions[i].path, &source, &source_size);
+    VMESH_MeshLoadObj(&meshes[i], source, source_size);    
+
+    for (u32 j = 0; j < meshes[i].index_count; j++) {
+      meshes[i].indices[j] += vertex_count_total;
+    }      
+
+    vertex_count_total += meshes[i].vertex_count;
+    index_count_total += meshes[i].index_count;
+    SDL_Log(APP_WAIT "Mesh for \"%s\" ready, %d vertices and %d indices",
+            descriptions[i].name, meshes[i].vertex_count,
+            meshes[i].index_count);
+    free(source);
   }
 
+
+  Renderer.vulkan.modelData.models.models = calloc(sizeof(struct Model), count);
+  Renderer.vulkan.modelData.models.count = count;
   
+  // Preallocate all vertices and indices
+  Renderer.vulkan.modelData.vertexBuffer.vertices.vertices =
+      calloc(sizeof(Vertex), vertex_count_total);
+  Renderer.vulkan.modelData.indexBuffer.indices.indices =
+      calloc(sizeof(u32), index_count_total);
+
+  // Set vertex and index count
+  Renderer.vulkan.modelData.vertexBuffer.vertices.count = vertex_count_total;
+  Renderer.vulkan.modelData.indexBuffer.indices.count = index_count_total;
+
+  u32 vertex_offset = 0;
+  u32 index_offset = 0;
+  for (uint32_t i = 0; i < count; i++) {
+    struct Vertices *renderer_vertices =
+        &Renderer.vulkan.modelData.vertexBuffer.vertices;
+    struct Indices *renderer_indices =
+        &Renderer.vulkan.modelData.indexBuffer.indices;
+    struct Model *model = &Renderer.vulkan.modelData.models.models[i];
+    Mesh *mesh = &meshes[i];
+    strncpy(model->name, descriptions[i].name, MODEL_NAME_LENGTH);
+    
+
+    memcpy(&renderer_vertices->vertices[vertex_offset], mesh->vertices,
+           sizeof(Vertex)*mesh->vertex_count);
+    memcpy(&renderer_indices->indices[index_offset], mesh->indices,
+           sizeof(u32)*mesh->index_count);
+
+    model->vertexCount = mesh->vertex_count;
+    model->indexCount = mesh->index_count;
+
+    model->vertexOffset = vertex_offset;
+    model->indexOffset = index_offset;
+
+    vertex_offset += mesh->vertex_count;
+    index_offset += mesh->index_count;
+  }
+
+
+  for (uint32_t i = 0; i < count; i++) {
+    free(meshes[i].vertices);
+    free(meshes[i].indices);
+  }    
   
-  Renderer.vulkan.pipeline.vertexBuffer.vertices.vertices = malloc(sizeof(vertices));
-  Renderer.vulkan.pipeline.vertexBuffer.vertices.count = ARRLEN(vertices);
-  memcpy(Renderer.vulkan.pipeline.vertexBuffer.vertices.vertices, vertices,
-         sizeof(vertices));
   return SDL_APP_CONTINUE;
 }
+
+SDL_AppResult APP_VulkanVerticesInitialize() {
+  struct ModelDescription descriptions[] = {
+    (struct ModelDescription){.path = "models/box.obj", .name = "box"},
+    (struct ModelDescription){.path = "models/Ship.obj", .name = "ship"},    
+  };
+
+  if (APP_VulkanModelLoad(descriptions, ARRLEN(descriptions))){
+    return SDL_APP_FAILURE;
+  }    
+
+  uint32_t dimension = 1;
+  Renderer.vulkan.modelData.instanceBuffer.instances.instances =
+      calloc(sizeof(struct InstanceData), dimension * dimension);  
+  Renderer.vulkan.modelData.instanceBuffer.instances.count =
+      dimension * dimension;
+
+  float position[3];
+  float rotation[3];
+  uint32_t instance = 0;
+  for (uint32_t i = 0; i < dimension; i++) {
+    for (uint32_t j = 0; j < dimension; j++) {
+      float *matrix =
+          Renderer.vulkan.modelData.instanceBuffer.instances.instances[instance]
+              .modelMatrix;
+      VM3_Set(position, i, 0, j);
+      VM3_Set(rotation, 2*i*PI/dimension, 0, 2*j*PI/dimension);
+      float scale = 0.2;
+      VM44_Copy(matrix, (float[])VM44_IDENTITY);
+      VM44_Scale(matrix, (float[]){scale, scale, scale});
+      VM44_Rotate(matrix, rotation);
+      VM44_Translate(matrix, position);
+      VM44_Transpose(matrix);
+      instance++;
+    }      
+  }    
+  
+  return SDL_APP_CONTINUE;
+}
+
+SDL_AppResult APP_VulkanBDAsUpdate() {
+  memcpy(Renderer.vulkan.modelData.vertexBuffer.allocationInfo.pMappedData,
+         Renderer.vulkan.modelData.vertexBuffer.vertices.vertices,
+         sizeof(Vertex) *
+             Renderer.vulkan.modelData.vertexBuffer.vertices.count);
+  memcpy(Renderer.vulkan.modelData.indexBuffer.allocationInfo.pMappedData,
+         Renderer.vulkan.modelData.indexBuffer.indices.indices,
+         sizeof(u32) * Renderer.vulkan.modelData.indexBuffer.indices.count);
+
+  memcpy(Renderer.vulkan.modelData.instanceBuffer.allocationInfo.pMappedData,         
+         Renderer.vulkan.modelData.instanceBuffer.instances.instances,
+         sizeof(struct InstanceData) * Renderer.vulkan.modelData.instanceBuffer.instances.count);
+  return SDL_APP_CONTINUE;
+}
+
+
+SDL_AppResult APP_VulkanModelDraw(struct Model *model) {
+
+  vkCmdDraw(Renderer.vulkan.frameCurrent->commandBuffer, model->indexCount,
+            Renderer.vulkan.modelData.instanceBuffer.instances.count,
+            model->indexOffset, 0);
+  
+
+  return SDL_APP_CONTINUE;      
+};  

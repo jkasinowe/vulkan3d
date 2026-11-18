@@ -1,16 +1,15 @@
 #include <vmath.h>
+#include <vmesh.h>
 #define SDL_MAIN_USE_CALLBACKS 1
 #define VK_NO_PROTOTYPES
-#include <SDL3/SDL.h>
-#include <SDL3/SDL_vulkan.h>
 #include <shaderc/shaderc.h>
 #include <volk.h>
 #include <vk_mem_alloc.h>
 #include <vulkan/vk_enum_string_helper.h>
 #include <vulkan/vulkan.h>
-#include <SDL3/SDL_init.h>
 #include <vulkan/vulkan_core.h>
 #include "app_game.h"
+#include <SDL3/SDL.h>
 
 #define ARRLEN(x) (sizeof(x) / sizeof(*x))
 
@@ -18,8 +17,9 @@
 #define APP_DEPTH_FORMAT VK_FORMAT_D32_SFLOAT
 #define APP_SHADER_PATH "src/shaders/"
 #define APP_MAX_FRAMES_IN_FLIGHT 3
-#define APP_VSYNC_MODE 1
+#define APP_VSYNC_MODE 0
 #define APP_MOUSE_HIDE 1
+#define APP_PLAYER_SPEED 20.0
 
 
 struct Window {
@@ -72,14 +72,10 @@ struct UniformBufferObject {
   float projection[16];  
   float screenSize[2];
   float time;
+  float light_color[3];
+  float light_position[3];
 };
 
-
-struct Model {
-  char name[50];
-  u32 vertex_offset;
-  u32 vertex_count;
-};
 
 struct Buffers {
   VkBuffer *vkBuffers;
@@ -95,16 +91,33 @@ struct Uniform {
   VkDescriptorSet descriptorSets[APP_MAX_FRAMES_IN_FLIGHT];  
 };
 
-struct Vertex {
-  float position[3];
-  float normal[3];
-  float uv[2];
-};  
+#define MODEL_NAME_LENGTH 50
+struct Model {
+  char name[MODEL_NAME_LENGTH+1];
+  u32 vertexCount;
+  u32 indexCount;
+  u32 vertexOffset;
+  u32 indexOffset;
+};
 
 struct Vertices {
-  struct Vertex *vertices;
+  struct VMESH_Vertex *vertices;
   uint32_t count;
 };
+
+struct Indices {
+  uint32_t *indices;
+  uint32_t count;
+};
+
+struct InstanceData {
+  float modelMatrix[16];
+};
+
+struct Instances {
+  struct InstanceData* instances;
+  uint32_t count;
+};  
 
 struct VertexBuffer {
   VkBuffer vkBuffer;
@@ -112,6 +125,41 @@ struct VertexBuffer {
   VmaAllocation allocation;
   VkDeviceAddress address;
   VmaAllocationInfo allocationInfo;
+};
+
+struct IndexBuffer {
+  VkBuffer vkBuffer;
+  struct Indices indices;
+  VmaAllocation allocation;
+  VkDeviceAddress address;
+  VmaAllocationInfo allocationInfo;
+};
+
+struct InstanceBuffer {
+  VkBuffer vkBuffer;
+  struct Instances instances;
+  VmaAllocation allocation;
+  VkDeviceAddress address;
+  VmaAllocationInfo allocationInfo;
+};
+
+struct Models {
+  struct Model *models;
+  u32 count;
+};  
+
+struct ModelData {
+  struct VertexBuffer vertexBuffer;
+  struct IndexBuffer indexBuffer;
+  struct InstanceBuffer instanceBuffer;
+  struct Models models;
+};
+
+
+struct PushConstantData {
+  VkDeviceAddress indexAddress;
+  VkDeviceAddress vertexAddress;
+  VkDeviceAddress instanceAddress;
 };  
 
 struct Pipeline {
@@ -119,8 +167,7 @@ struct Pipeline {
   VkPipeline vkPipeline;
   struct Uniform uniform;
   struct Shader shader;
-  struct VertexBuffer vertexBuffer;
-  struct Model *models;
+  struct PushConstantData pushConstants;
 };
 
 struct Vulkan {
@@ -137,6 +184,7 @@ struct Vulkan {
   uint64_t nextSignalValue;
   struct FrameResources *frameCurrent;
   uint32_t frameIndex;
+  struct ModelData modelData;
 };
 
 struct Depth {
@@ -222,3 +270,10 @@ SDL_AppResult APP_VulkanCommandBuffersCreate();
 void APP_VulkanCommandBuffersDestroy();
 SDL_AppResult APP_RendererWindowSizeUpdate();
 SDL_AppResult APP_VulkanUniformBufferObjectUpdate();
+SDL_AppResult APP_VulkanBDACreate(u32 size, VkBuffer *buffer,
+                                  VmaAllocation *allocation,
+                                  VmaAllocationInfo *allocation_info,
+                                  VkDeviceAddress *address);
+SDL_AppResult APP_VulkanBDAsCreate();
+SDL_AppResult APP_VulkanBDAsUpdate();
+SDL_AppResult APP_VulkanModelDraw(struct Model *model);

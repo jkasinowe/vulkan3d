@@ -73,6 +73,14 @@ SDL_AppResult APP_GraphicsInit() {
 
   if (APP_VulkanVerticesInitialize()) {    
     return SDL_APP_FAILURE;
+  }
+
+  if (APP_VulkanBDAsCreate()) {    
+    return SDL_APP_FAILURE;
+  }
+
+  if (APP_VulkanBDAsUpdate()) {
+    return SDL_APP_FAILURE;
   }    
   
   // Creating descriptor set layout
@@ -88,7 +96,9 @@ SDL_AppResult APP_GraphicsInit() {
   
   if (APP_VulkanDescriptorSetsCreate()) {
     return SDL_APP_FAILURE;
-  }    
+  }
+
+  
   
   // Creating pipeline
   //------------------------------------------------------------------------------------------------------
@@ -105,6 +115,11 @@ SDL_AppResult APP_GraphicsInit() {
   // Creating frame in flight command buffers;
   //------------------------------------------------------------------------------------------------------
   if (APP_VulkanCommandBuffersCreate() == SDL_APP_FAILURE) {
+    return SDL_APP_FAILURE;
+  }
+
+  SDL_Log("Loading mesh data");
+  if (APP_VulkanBDAsUpdate()) {
     return SDL_APP_FAILURE;
   }    
   

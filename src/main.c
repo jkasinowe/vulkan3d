@@ -1,10 +1,5 @@
 #include "app_internall.h"
-#include <SDL3/SDL_events.h>
-#include <SDL3/SDL_init.h>
 #include <SDL3/SDL_main.h>
-#include <SDL3/SDL_scancode.h>
-#include <SDL3/SDL_timer.h>
-#include <SDL3/SDL_video.h>
 #include <vulkan/vulkan_core.h>
 
 uint64_t time_last = 0;
@@ -13,6 +8,7 @@ double delta_time = 0;
 SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
   time_last = SDL_GetPerformanceCounter();
   Player.position[2] = -2;
+  
   if (APP_GraphicsInit() != SDL_APP_CONTINUE) {
     return SDL_APP_FAILURE;
   }
@@ -296,6 +292,8 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
     viewport.y = 0;
     viewport.width = (float)Renderer.swapchain.width;
     viewport.height = (float)Renderer.swapchain.height;
+    viewport.minDepth = 0;
+    viewport.maxDepth = 1;
     vkCmdSetViewport(Renderer.vulkan.frameCurrent->commandBuffer, 0, 1,
                      &viewport);
 
@@ -319,19 +317,20 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
                                  .descriptorSets[Renderer.vulkan.frameIndex],
                             0, NULL);
 
-    memcpy(Renderer.vulkan.pipeline.vertexBuffer.allocationInfo.pMappedData,
-           Renderer.vulkan.pipeline.vertexBuffer.vertices.vertices,
-           sizeof(struct Vertex) *
-               Renderer.vulkan.pipeline.vertexBuffer.vertices.count);
-    
-    
-    vkCmdPushConstants(Renderer.vulkan.frameCurrent->commandBuffer,
-                     Renderer.vulkan.pipeline.layout,
-		       VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(VkDeviceAddress),
-                     &Renderer.vulkan.pipeline.vertexBuffer.address);
 
+
+    vkCmdPushConstants(Renderer.vulkan.frameCurrent->commandBuffer,
+                       Renderer.vulkan.pipeline.layout,
+                       VK_SHADER_STAGE_VERTEX_BIT, 0, sizeof(struct PushConstantData),
+                       &Renderer.vulkan.pipeline.pushConstants);
+
+
+    /*
     vkCmdDraw(Renderer.vulkan.frameCurrent->commandBuffer,
-              Renderer.vulkan.pipeline.vertexBuffer.vertices.count, 1, 0, 0);
+              Renderer.vulkan.modelData.indexBuffer.indices.count,
+              Renderer.vulkan.modelData.instanceBuffer.instances.count, 0, 0);
+    */
+    APP_VulkanModelDraw(&Renderer.vulkan.modelData.models.models[1]);
   }
 
   // End dynamic rendering

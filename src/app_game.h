@@ -1,6 +1,3 @@
-#include <SDL3/SDL.h>
-
-void APP_GameRotateYMatix(float angle, float mat[static 9]);
 
 extern double delta_time;
 
