@@ -8,8 +8,6 @@ struct Light Light = {.ambientColor = {1, 1, 1}};
 
 void APP_GameInputHandle() {
   int key_count = 0;
-  const bool *keys = SDL_GetKeyboardState(&key_count);
-
   float matrix[16] = VM44_IDENTITY;
   VM44_Rotate(matrix, Player.rotation);
   
@@ -26,29 +24,29 @@ void APP_GameInputHandle() {
   VM3_ScaleO(forward, delta_time*APP_PLAYER_SPEED, forward_scaled);
   VM3_ScaleO(right, delta_time*APP_PLAYER_SPEED, right_scaled);
 
-  if (keys[SDL_SCANCODE_W]) {
+  if (VSYS_WindowKeyDownGet(Renderer.window.vsysWindow, VSYS_KEY_W)) {
     VM3_Add(move, forward_scaled);
   }
-  if (keys[SDL_SCANCODE_S]) {
-    VM3_Subtract(move, forward_scaled);    
+  if (VSYS_WindowKeyDownGet(Renderer.window.vsysWindow, VSYS_KEY_S)) {
+    VM3_Subtract(move, forward_scaled);
   }
-  if (keys[SDL_SCANCODE_D]) {
+  if (VSYS_WindowKeyDownGet(Renderer.window.vsysWindow, VSYS_KEY_D)) {
     VM3_Add(move, right_scaled);
   }
-  if (keys[SDL_SCANCODE_A]) {
+  if (VSYS_WindowKeyDownGet(Renderer.window.vsysWindow, VSYS_KEY_A)) {
     VM3_Subtract(move, right_scaled);
   }
-  if (keys[SDL_SCANCODE_SPACE]) {
+  if (VSYS_WindowKeyDownGet(Renderer.window.vsysWindow, VSYS_KEY_SPACE)) {
     move[1] += delta_time * APP_PLAYER_SPEED;
   }
-  if (keys[SDL_SCANCODE_LSHIFT]) {
+  if (VSYS_WindowKeyDownGet(Renderer.window.vsysWindow, VSYS_KEY_LSHIFT)) {    
     move[1] -= delta_time * APP_PLAYER_SPEED;    
   }
 
   const float sensitivity = 0.01;
-  float dx, dy;
-  SDL_GetRelativeMouseState(&dx, &dy);
-  Player.rotation[1] -= dx * sensitivity;
+  float mouse_delta[2];
+  VSYS_WindowMouseDeltaGet(Renderer.window.vsysWindow, mouse_delta);
+  Player.rotation[1] -= mouse_delta[0] * sensitivity;
   VM3_Add(Player.position, move);
 }
 

@@ -4,6 +4,6 @@ VKAPI_ATTR VkBool32 VKAPI_CALL LOG_DebugCallback(VkDebugUtilsMessageSeverityFlag
                   VkDebugUtilsMessageTypeFlagsEXT messageType,
                   const VkDebugUtilsMessengerCallbackDataEXT *pCallbackData,
 							void *pUserData) {
-  SDL_Log("%s", pCallbackData->pMessage);
+  VLOG_Info("%s", pCallbackData->pMessage);
   return VK_FALSE;
 }

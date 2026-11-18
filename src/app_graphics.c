@@ -1,129 +1,126 @@
 #include "app_internall.h"
-#include <SDL3/SDL_init.h>
 
-SDL_AppResult APP_GraphicsInit() {
-// Initializing rendering data
-  if (APP_RendererInit() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
+bool APP_GraphicsInit() {
+  VSYS_Initialize();
+  // Initializing rendering data
+  if (APP_RendererInit() != false) {
+    return true;
   }
 
   // Initializing SDL window
-  if (APP_SDLInit() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
+  if (APP_VSYSInit() != false) {    
+    return true;
   }
-  
+
   // Initializing vulkan via volk
-  if (APP_VulkanVolkBind() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanVolkBind() != false) {
+    return true;
   }
 
   //------------------------------------------------------------------------------
   // Creating VkInstance
-  if (APP_VulkanInstanceCreate() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanInstanceCreate() != false) {
+    return true;
   }
-  
+
   // Create surface
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanSurfaceCreate() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanSurfaceCreate() != false) {
+    return true;
   }
 
   // Find physical device
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanPhysicalDeviceFind() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanPhysicalDeviceFind() != false) {
+    return true;
   }
 
   // Find graphics queue
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanGraphicsQueueFind() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanGraphicsQueueFind() != false) {
+    return true;
   }
 
   // Creating device
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanDeviceCreate() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanDeviceCreate() != false) {
+    return true;
   }
 
   // Initializing VMA
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanVMACreate() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanVMACreate() != false) {
+    return true;
   }
 
   // Creating swapchain
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanSwapchainCreate() == SDL_APP_FAILURE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanSwapchainCreate() == true) {
+    return true;
   }
 
   // Creating shaders
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanShadersCreate() == SDL_APP_FAILURE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanShadersCreate() == true) {
+    return true;
   }
 
   // Creating uniform buffer object
   //------------------------------------------------------------------------------------------------------
   if (APP_VulkanUniformBuffersCreate(&Renderer.vulkan.pipeline.uniform)) {
-    return SDL_APP_FAILURE;
+    return true;
   }
 
-  if (APP_VulkanVerticesInitialize()) {    
-    return SDL_APP_FAILURE;
+  if (APP_VulkanVerticesInitialize()) {
+    return true;
   }
 
-  if (APP_VulkanBDAsCreate()) {    
-    return SDL_APP_FAILURE;
+  if (APP_VulkanBDAsCreate()) {
+    return true;
   }
 
   if (APP_VulkanBDAsUpdate()) {
-    return SDL_APP_FAILURE;
-  }    
-  
+    return true;
+  }
+
   // Creating descriptor set layout
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanDescriptorSetLayoutCreate()) {    
-    return SDL_APP_FAILURE;
+  if (APP_VulkanDescriptorSetLayoutCreate()) {
+    return true;
   }
 
   if (APP_VulkanDescriptorPoolCreate()) {
-    return SDL_APP_FAILURE;
+    return true;
   }
 
-  
   if (APP_VulkanDescriptorSetsCreate()) {
-    return SDL_APP_FAILURE;
+    return true;
   }
 
-  
-  
   // Creating pipeline
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanPipelineCreate(&Renderer.vulkan.pipeline) == SDL_APP_FAILURE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanPipelineCreate(&Renderer.vulkan.pipeline) == true) {
+    return true;
   }
 
   // Creating semaphores
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanSyncResourcesCreate() == SDL_APP_FAILURE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanSyncResourcesCreate() == true) {
+    return true;
   }
 
   // Creating frame in flight command buffers;
   //------------------------------------------------------------------------------------------------------
-  if (APP_VulkanCommandBuffersCreate() == SDL_APP_FAILURE) {
-    return SDL_APP_FAILURE;
+  if (APP_VulkanCommandBuffersCreate() == true) {
+    return true;
   }
 
-  SDL_Log("Loading mesh data");
+  VLOG_Wait("Loading mesh data");
   if (APP_VulkanBDAsUpdate()) {
-    return SDL_APP_FAILURE;
-  }    
-  
-  return SDL_APP_CONTINUE;
+    return true;
+  }
+
+  return false;
 }
 
 void APP_GraphicsFinalize() {
@@ -138,12 +135,14 @@ void APP_GraphicsFinalize() {
   APP_VulkanShadersDestroy();
 
   APP_VulkanSwapchainDestroy();
-  
+
   APP_VulkanVMADestroy();
 
   APP_VulkanDeviceDestroy();
 
   APP_VulkanSurfaceDestroy();
-  
+
   APP_VulkanVolkUnbind();
+
+  VSYS_Finalize();
 }

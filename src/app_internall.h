@@ -1,6 +1,8 @@
+#define VLOG_LOG
+#include <vlog.h>
 #include <vmath.h>
 #include <vmesh.h>
-#define SDL_MAIN_USE_CALLBACKS 1
+#include <vsys.h>
 #define VK_NO_PROTOTYPES
 #include <shaderc/shaderc.h>
 #include <volk.h>
@@ -9,7 +11,6 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_core.h>
 #include "app_game.h"
-#include <SDL3/SDL.h>
 
 #define ARRLEN(x) (sizeof(x) / sizeof(*x))
 
@@ -23,7 +24,7 @@
 
 
 struct Window {
-  SDL_Window *sdlWindow;
+  struct VSYS_Window *vsysWindow;
   uint32_t width; // main size
   uint32_t height;
 };
@@ -219,61 +220,62 @@ VKAPI_ATTR VkBool32 VKAPI_CALL LOG_DebugCallback(
 #define VkResultLog(result)                                                    \
   {                                                                            \
     const char *str = string_VkResult(result);                                 \
-    SDL_Log("Vulkan error: %s\n", str);                                        \
+    VLOG_Error("Vulkan error: %s\n", str);                                        \
   }
 
 #define VkResultCheck(x)                                                       \
   do {                                                                         \
     VkResult result = x;                                                       \
     if (result != VK_SUCCESS) {                                                \
+      VLOG_Error("Vulkan error:");                                             \
       VkResultLog(result);                                                     \
-      return SDL_APP_FAILURE;                                                  \
+      return true;                                                  \
     }                                                                          \
   } while (0)
 
-#define SDL_ResultCheck(x)                                                     \
+#define VSYS_ResultCheck(x)                                                    \
   if (!x) {                                                                    \
-    SDL_Log("%s", SDL_GetError());                                             \
-    return SDL_APP_FAILURE;                                                    \
+    VLOG_Error("%s", VSYS_ErrorGet());                                         \
+    return true;                                                               \
   }
 
-SDL_AppResult APP_GraphicsInit();
+bool APP_GraphicsInit();
 void APP_GraphicsFinalize();
-SDL_AppResult APP_RendererInit();
-SDL_AppResult APP_SDLInit();
-SDL_AppResult APP_VulkanVolkBind();
+bool APP_RendererInit();
+bool APP_VSYSInit();
+bool APP_VulkanVolkBind();
 void APP_VulkanVolkUnbind();
-SDL_AppResult APP_VulkanInstanceCreate();
+bool APP_VulkanInstanceCreate();
 void APP_VulkanInstanceDestroy();
-SDL_AppResult APP_VulkanSurfaceCreate();
+bool APP_VulkanSurfaceCreate();
 void APP_VulkanSurfaceDestroy();
-SDL_AppResult APP_VulkanPhysicalDeviceFind();
-SDL_AppResult APP_VulkanGraphicsQueueFind();
-SDL_AppResult APP_VulkanDeviceCreate();
+bool APP_VulkanPhysicalDeviceFind();
+bool APP_VulkanGraphicsQueueFind();
+bool APP_VulkanDeviceCreate();
 void APP_VulkanDeviceDestroy();
-SDL_AppResult APP_VulkanVMACreate();
+bool APP_VulkanVMACreate();
 void APP_VulkanVMADestroy();
-SDL_AppResult APP_VulkanSwapchainCreate();
+bool APP_VulkanSwapchainCreate();
 void APP_VulkanSwapchainDestroy();
-SDL_AppResult APP_VulkanShadersCreate();
+bool APP_VulkanShadersCreate();
 void APP_VulkanShadersDestroy();
-SDL_AppResult APP_VulkanUniformBuffersCreate(struct Uniform *uniform);
-SDL_AppResult APP_VulkanVerticesInitialize();
-SDL_AppResult APP_VulkanDescriptorSetLayoutCreate();
-SDL_AppResult APP_VulkanDescriptorPoolCreate();
-SDL_AppResult APP_VulkanDescriptorSetsCreate();
-SDL_AppResult APP_VulkanPipelineCreate(struct Pipeline *pipeline);
+bool APP_VulkanUniformBuffersCreate(struct Uniform *uniform);
+bool APP_VulkanVerticesInitialize();
+bool APP_VulkanDescriptorSetLayoutCreate();
+bool APP_VulkanDescriptorPoolCreate();
+bool APP_VulkanDescriptorSetsCreate();
+bool APP_VulkanPipelineCreate(struct Pipeline *pipeline);
 void APP_VulkanPipelineDestroy(struct Pipeline *pipeline);
-SDL_AppResult APP_VulkanSyncResourcesCreate();
+bool APP_VulkanSyncResourcesCreate();
 void APP_VulkanSyncResourcesDestroy();
-SDL_AppResult APP_VulkanCommandBuffersCreate();
+bool APP_VulkanCommandBuffersCreate();
 void APP_VulkanCommandBuffersDestroy();
-SDL_AppResult APP_RendererWindowSizeUpdate();
-SDL_AppResult APP_VulkanUniformBufferObjectUpdate();
-SDL_AppResult APP_VulkanBDACreate(u32 size, VkBuffer *buffer,
+bool APP_RendererWindowSizeUpdate();
+bool APP_VulkanUniformBufferObjectUpdate();
+bool APP_VulkanBDACreate(u32 size, VkBuffer *buffer,
                                   VmaAllocation *allocation,
                                   VmaAllocationInfo *allocation_info,
                                   VkDeviceAddress *address);
-SDL_AppResult APP_VulkanBDAsCreate();
-SDL_AppResult APP_VulkanBDAsUpdate();
-SDL_AppResult APP_VulkanModelDraw(struct Model *model);
+bool APP_VulkanBDAsCreate();
+bool APP_VulkanBDAsUpdate();
+bool APP_VulkanModelDraw(struct Model *model);

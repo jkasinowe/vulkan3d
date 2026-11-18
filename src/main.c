@@ -1,23 +1,16 @@
 #include "app_internall.h"
-#include <SDL3/SDL_main.h>
+#include <SDL3/SDL_init.h>
+#include <vsys.h>
 #include <vulkan/vulkan_core.h>
 
 uint64_t time_last = 0;
 double delta_time = 0;
 
-SDL_AppResult SDL_AppInit(void **appstate, int argc, char *argv[]) {
-  time_last = SDL_GetPerformanceCounter();
-  Player.position[2] = -2;
-  
-  if (APP_GraphicsInit() != SDL_APP_CONTINUE) {
-    return SDL_APP_FAILURE;
-  }
-  return SDL_APP_CONTINUE;
-}
-
-SDL_AppResult APP_RendererWindowSizeUpdate() {
-  SDL_GetWindowSize(Renderer.window.sdlWindow, &Renderer.window.width,
-                    &Renderer.window.height);
+bool APP_RendererWindowSizeUpdate() {
+  f32 window_size[2];
+  VSYS_WindowSizeGet(Renderer.window.vsysWindow, window_size);
+  Renderer.window.width = window_size[0];
+  Renderer.window.height = window_size[1];
   Renderer.swapchain.requireRecreate = true;
   return SDL_APP_CONTINUE;
 }
@@ -245,13 +238,10 @@ void APP_RendererPresent() {
   vkQueuePresentKHR(Renderer.graphicsQueue, &present_info);
 }
 
-SDL_AppResult SDL_AppIterate(void *appstate) {
 
-  uint64_t time_now = SDL_GetPerformanceCounter();
-  delta_time = (time_now - time_last)/(double)SDL_GetPerformanceFrequency();
-  time_last = time_now;
-  
-  SDL_Log("Frame %d, dt = %lf", Renderer.frameIndex, delta_time);
+
+
+bool APP_GameLoop() {
   APP_GameInputHandle();
   
   // Recreate swapchain if necessary
@@ -267,13 +257,13 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
   if (acquire_image_vulkan_result == VK_ERROR_OUT_OF_DATE_KHR) {
     Renderer.swapchain.requireRecreate = true;
-    return SDL_APP_CONTINUE;
+    return true;
   } else if (acquire_image_vulkan_result == VK_SUBOPTIMAL_KHR) {
     Renderer.swapchain.requireRecreate = true;
   }
 
   // Update uniforms
-  SDL_Log("Image index: %d", Renderer.swapchain.imageIndex);
+  VLOG_Info("Image index: %d", Renderer.swapchain.imageIndex);
   APP_VulkanUniformBufferObjectUpdate();
   
   // After we waited for semaphores, it's safe to record commands
@@ -348,29 +338,25 @@ SDL_AppResult SDL_AppIterate(void *appstate) {
 
   // Present the image to the screen
   APP_RendererPresent();
-
-  return SDL_APP_CONTINUE;
+  return false;
 }
 
-SDL_AppResult SDL_AppEvent(void *appstate, SDL_Event *event) {
-  switch (event->type) {
-  case SDL_EVENT_KEY_DOWN:
-    switch (event->key.scancode) {
-    case SDL_SCANCODE_ESCAPE:
-      return SDL_APP_SUCCESS;
-    default:
-      return SDL_APP_CONTINUE;
-    }
-    break;
-  case SDL_EVENT_QUIT:
-    return SDL_APP_SUCCESS;
-  case SDL_EVENT_WINDOW_RESIZED:
-    APP_RendererWindowSizeUpdate();
-    break;
+
+bool main(int argc, char *argv[]) {
+  if (APP_GraphicsInit() != SDL_APP_CONTINUE) {
+    return -1;
   }
-  return SDL_APP_CONTINUE;
-}
 
-void SDL_AppQuit(void *appstate, SDL_AppResult result) {
+  VSYS_WindowFrameTimeTargetSet(Renderer.window.vsysWindow, 1./60);
+  Player.position[2] = -2;
+
+  while (!VSYS_WindowShouldCloseGet(Renderer.window.vsysWindow)) {
+    if (!VSYS_WindowFrameTimeWaitedGet(Renderer.window.vsysWindow)) continue;
+    VSYS_InputUpdate(Renderer.window.vsysWindow);
+    
+    if(APP_GameLoop()) break;
+  }
+
   APP_GraphicsFinalize();
+  return 0;
 }
